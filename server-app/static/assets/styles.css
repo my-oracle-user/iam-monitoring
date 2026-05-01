@@ -1099,6 +1099,14 @@ tbody tr:last-child td {
     gap: 10px;
 }
 
+.help-inline-form {
+    margin-top: 18px;
+}
+
+.help-form-actions {
+    justify-content: flex-start;
+}
+
 .field-span-2 {
     grid-column: span 2;
 }

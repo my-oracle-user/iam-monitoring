@@ -27,6 +27,9 @@ IAM_MONITORING_HTTPS_PROXY=http://www-proxy-phx.oraclecorp.com:80
 IAM_MONITORING_NO_PROXY=127.0.0.1,localhost
 ```
 
+You can also save update-check proxy details from `Administration -> Help -> GitHub Update Proxy`.
+Those UI-saved values take effect immediately for the dashboard's `Check For Updates` action.
+
 ## Quick Upgrade
 
 From the Linux host, run the installed upgrader against the latest GitHub source bundle:
@@ -50,6 +53,9 @@ bash /opt/iam-monitoring/upgrade.sh --archive /tmp/iam-monitoring-main.tar.gz
 
 For the dashboard service's own `Check For Updates` button, put the proxy settings in `/etc/iam-monitoring.env`
 and restart the service.
+
+Or save them from `Administration -> Help -> GitHub Update Proxy` if you want that GitHub check to work
+without editing the Linux env file directly.
 
 ## What is here
 
@@ -113,6 +119,10 @@ After changing `/etc/iam-monitoring.env`, restart the service:
 ```bash
 sudo systemctl restart iam-monitoring
 ```
+
+The Help page can also store proxy settings inside the dashboard registry for `Check For Updates`.
+That UI path applies immediately and is useful when admins should not edit `/etc/iam-monitoring.env`
+just to make the GitHub version check work.
 
 Post-install checks:
 

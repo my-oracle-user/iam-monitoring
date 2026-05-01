@@ -48,6 +48,10 @@ from notification_store import (
     save_notification_settings,
     delete_notification_recipient,
 )
+from support_store import (
+    get_update_proxy_settings,
+    save_update_proxy_settings,
+)
 
 
 APP_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -97,6 +101,7 @@ def build_help_details():
     runtime_env_dir = os.path.join(state_dir, "runtime_env")
     snapshot_dir = os.path.join(state_dir, "snapshots")
     job_state_dir = os.path.join(state_dir, "job_state")
+    update_proxy = merge_update_check_proxy_settings()
     return {
         "productName": "Oracle Identity & Access Management Dashboard",
         "version": version,
@@ -121,6 +126,7 @@ def build_help_details():
         "healthUrl": "http://{0}:{1}/healthz".format(local_health_host, PORT),
         "schedulerWakeMinutes": scheduler_minutes,
         "defaultCollectionMinutes": default_collection_minutes,
+        "updateProxy": update_proxy,
         "checks": [
             {
                 "label": "Service status",
@@ -148,7 +154,7 @@ def build_help_details():
             "Administration is where environments, notifications, and support details live. Environment pages stay focused on that selected IAM environment.",
             "Use Save And Bootstrap when adding an environment so the dashboard can switch from the initial SSH login to its installed runtime key for ongoing collection.",
             "Fresh installs start with an empty SQLite environment registry and pick up runtime settings from the local environment file.",
-            "If the Check For Updates action needs an outbound proxy, set IAM_MONITORING_HTTP_PROXY and IAM_MONITORING_HTTPS_PROXY in /etc/iam-monitoring.env, then restart the service.",
+            "If GitHub update checks need an outbound proxy, save it under Administration / Help / GitHub Update Proxy. The Linux env file remains the service-level fallback.",
         ],
     }
 
@@ -202,23 +208,23 @@ def compare_version_values(local_version, remote_version):
     return 0
 
 
-def update_check_proxy_settings():
+def env_update_check_proxy_settings():
     return {
-        "http": str(
+        "httpProxy": str(
             os.environ.get(
                 "IAM_MONITORING_HTTP_PROXY",
                 os.environ.get("http_proxy", os.environ.get("HTTP_PROXY", "")),
             )
             or ""
         ).strip(),
-        "https": str(
+        "httpsProxy": str(
             os.environ.get(
                 "IAM_MONITORING_HTTPS_PROXY",
                 os.environ.get("https_proxy", os.environ.get("HTTPS_PROXY", "")),
             )
             or ""
         ).strip(),
-        "no_proxy": str(
+        "noProxy": str(
             os.environ.get(
                 "IAM_MONITORING_NO_PROXY",
                 os.environ.get("no_proxy", os.environ.get("NO_PROXY", "")),
@@ -228,22 +234,85 @@ def update_check_proxy_settings():
     }
 
 
-def update_check_proxy_hint(proxy_settings=None):
-    proxy_settings = proxy_settings or update_check_proxy_settings()
-    if proxy_settings.get("http") or proxy_settings.get("https"):
+def proxy_settings_have_values(proxy_settings):
+    proxy_settings = proxy_settings or {}
+    return bool(
+        str(proxy_settings.get("httpProxy") or "").strip()
+        or str(proxy_settings.get("httpsProxy") or "").strip()
+        or str(proxy_settings.get("noProxy") or "").strip()
+    )
+
+
+def proxy_settings_have_routing(proxy_settings):
+    proxy_settings = proxy_settings or {}
+    return bool(
+        str(proxy_settings.get("httpProxy") or "").strip()
+        or str(proxy_settings.get("httpsProxy") or "").strip()
+    )
+
+
+def merge_update_check_proxy_settings(saved_settings=None, env_settings=None):
+    saved_settings = saved_settings or get_update_proxy_settings(DB_PATH)
+    env_settings = env_settings or env_update_check_proxy_settings()
+    effective_settings = {
+        "httpProxy": str(saved_settings.get("httpProxy") or env_settings.get("httpProxy") or "").strip(),
+        "httpsProxy": str(saved_settings.get("httpsProxy") or env_settings.get("httpsProxy") or "").strip(),
+        "noProxy": str(saved_settings.get("noProxy") or env_settings.get("noProxy") or "").strip(),
+    }
+    saved_configured = proxy_settings_have_values(saved_settings)
+    env_configured = proxy_settings_have_values(env_settings)
+    if saved_configured and env_configured:
+        source = "dashboard_and_env"
+        source_label = "Dashboard saved proxy with service env fallback"
+    elif saved_configured:
+        source = "dashboard"
+        source_label = "Dashboard saved proxy"
+    elif env_configured:
+        source = "service_env"
+        source_label = "Service env file"
+    else:
+        source = "none"
+        source_label = "No proxy configured"
+    return {
+        "savedSettings": {
+            "httpProxy": str(saved_settings.get("httpProxy") or "").strip(),
+            "httpsProxy": str(saved_settings.get("httpsProxy") or "").strip(),
+            "noProxy": str(saved_settings.get("noProxy") or "").strip(),
+            "configured": saved_configured,
+        },
+        "envSettings": {
+            "httpProxy": str(env_settings.get("httpProxy") or "").strip(),
+            "httpsProxy": str(env_settings.get("httpsProxy") or "").strip(),
+            "noProxy": str(env_settings.get("noProxy") or "").strip(),
+            "configured": env_configured,
+        },
+        "effectiveSettings": effective_settings,
+        "savedConfigured": saved_configured,
+        "envConfigured": env_configured,
+        "configured": proxy_settings_have_routing(effective_settings),
+        "source": source,
+        "sourceLabel": source_label,
+    }
+
+
+def update_check_proxy_hint(proxy_context=None):
+    proxy_context = proxy_context or merge_update_check_proxy_settings()
+    if proxy_context.get("configured"):
         return (
-            "Proxy is already configured for the service. Recheck the proxy host, port, "
-            "and any required SSL or egress policy."
+            "Proxy is already configured for GitHub update checks. Recheck the proxy host, "
+            "port, and any required SSL or egress policy."
         )
     return (
-        "If this host requires an outbound proxy, set IAM_MONITORING_HTTP_PROXY and "
-        "IAM_MONITORING_HTTPS_PROXY in /etc/iam-monitoring.env, then restart iam-monitoring."
+        "If this host requires an outbound proxy, save it under Administration / Help / "
+        "GitHub Update Proxy, or set IAM_MONITORING_HTTP_PROXY and "
+        "IAM_MONITORING_HTTPS_PROXY in /etc/iam-monitoring.env and restart iam-monitoring."
     )
 
 
 def build_update_check_payload():
     current_version = read_version()
-    proxy_settings = update_check_proxy_settings()
+    proxy_context = merge_update_check_proxy_settings()
+    proxy_settings = proxy_context.get("effectiveSettings") or {}
     payload = {
         "currentVersion": current_version,
         "remoteVersion": "",
@@ -253,11 +322,17 @@ def build_update_check_payload():
         "checkedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "status": "idle",
         "message": "",
-        "proxyConfigured": bool(proxy_settings.get("http") or proxy_settings.get("https")),
+        "proxyConfigured": bool(proxy_context.get("configured")),
+        "proxySource": proxy_context.get("source") or "none",
+        "proxySourceLabel": proxy_context.get("sourceLabel") or "No proxy configured",
     }
     try:
         request = Request(payload["versionUrl"], headers={"User-Agent": "iam-monitoring-update-check"})
-        proxy_handler_settings = {scheme: value for scheme, value in proxy_settings.items() if scheme in ("http", "https") and value}
+        proxy_handler_settings = {}
+        if proxy_settings.get("httpProxy"):
+            proxy_handler_settings["http"] = proxy_settings.get("httpProxy")
+        if proxy_settings.get("httpsProxy"):
+            proxy_handler_settings["https"] = proxy_settings.get("httpsProxy")
         if proxy_handler_settings:
             opener = build_opener(ProxyHandler(proxy_handler_settings))
             response_handle = opener.open(request, timeout=6)
@@ -287,7 +362,7 @@ def build_update_check_payload():
             )
     except Exception as exc:
         payload["status"] = "error"
-        payload["message"] = "GitHub update check failed: {0} {1}".format(str(exc), update_check_proxy_hint(proxy_settings))
+        payload["message"] = "GitHub update check failed: {0} {1}".format(str(exc), update_check_proxy_hint(proxy_context))
     return payload
 
 
@@ -538,6 +613,8 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path or "/"
         if path == "/api/admin/notifications/settings":
             return self.handle_save_notification_settings()
+        if path == "/api/admin/help/proxy":
+            return self.handle_save_update_proxy_settings()
         match = re.match(r"^/api/admin/environments/([^/]+)$", path)
         if match:
             return self.handle_update_environment(match.group(1))
@@ -620,8 +697,25 @@ class Handler(BaseHTTPRequestHandler):
                     "checkedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     "status": "error",
                     "message": "GitHub update check failed: {0}".format(str(exc)),
+                    "proxyConfigured": False,
+                    "proxySource": "none",
+                    "proxySourceLabel": "No proxy configured",
                 },
             )
+
+    def handle_save_update_proxy_settings(self):
+        try:
+            payload = parse_json_body(self)
+            settings = save_update_proxy_settings(DB_PATH, payload)
+            self.send_json(
+                200,
+                {
+                    "settings": settings,
+                    "proxy": merge_update_check_proxy_settings(saved_settings=settings),
+                },
+            )
+        except Exception as exc:
+            self.send_json(400, {"error": str(exc)})
 
     def handle_create_environment(self):
         try:
