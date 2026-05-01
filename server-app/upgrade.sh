@@ -151,12 +151,61 @@ resolve_source_dir() {
 
 validate_source_dir() {
   local source_dir="$1"
-  for required_path in app.py collect_environment.py collector.py config_store.py job_runner.py requirements.txt scheduler_jobs.sh static deploy; do
+  for required_path in \
+    app.py \
+    collect_environment.py \
+    collector.py \
+    config_store.py \
+    environment_registry.py \
+    job_runner.py \
+    notification_store.py \
+    support_store.py \
+    upgrade.sh \
+    upgrade_runtime.py \
+    upgrade_watcher.py \
+    requirements.txt \
+    scheduler_jobs.sh \
+    static \
+    deploy \
+    deploy/iam-monitoring-upgrader.service; do
     if [[ ! -e "${source_dir}/${required_path}" ]]; then
       echo "Bundle is missing ${required_path} in ${source_dir}" >&2
       exit 1
     fi
   done
+}
+
+handoff_to_bundle_upgrade_script() {
+  local source_dir="$1"
+  local bundle_upgrade_script="${source_dir}/upgrade.sh"
+  local -a handoff_args=()
+
+  if [[ -n "${IAM_MONITORING_UPGRADE_HANDOFF:-}" ]]; then
+    return
+  fi
+
+  if [[ "${source_dir}" == "${SCRIPT_DIR}" ]]; then
+    return
+  fi
+
+  if [[ ! -x "${bundle_upgrade_script}" && ! -f "${bundle_upgrade_script}" ]]; then
+    return
+  fi
+
+  handoff_args+=(--install-dir "${INSTALL_DIR}")
+  handoff_args+=(--config-file "${CONFIG_FILE}")
+  handoff_args+=(--state-dir "${STATE_DIR}")
+  handoff_args+=(--log-dir "${LOG_DIR}")
+  handoff_args+=(--user "${SERVICE_USER}")
+  handoff_args+=(--backup-root "${BACKUP_ROOT}")
+  if [[ "${SKIP_RESTART}" -eq 1 ]]; then
+    handoff_args+=(--skip-restart)
+  fi
+
+  section "Handing off to bundle upgrade script"
+  echo "Using the bundle's own upgrade.sh from ${source_dir}"
+  export IAM_MONITORING_UPGRADE_HANDOFF=1
+  exec bash "${bundle_upgrade_script}" "${handoff_args[@]}"
 }
 
 copy_bundle_contents() {
@@ -212,6 +261,7 @@ fi
 detect_platform_tools
 SOURCE_DIR="$(resolve_source_dir)"
 validate_source_dir "${SOURCE_DIR}"
+handoff_to_bundle_upgrade_script "${SOURCE_DIR}"
 CURRENT_VERSION="$(read_version_file "${INSTALL_DIR}/VERSION")"
 PACKAGE_VERSION="$(read_version_file "${SOURCE_DIR}/VERSION")"
 TIMESTAMP="$(date '+%Y%m%d-%H%M%S')"

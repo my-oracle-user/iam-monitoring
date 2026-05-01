@@ -17,10 +17,23 @@ from upgrade_runtime import (
 
 APP_ROOT = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DB_PATH = os.environ.get("IAM_MONITORING_DB_PATH", os.path.join(APP_ROOT, "state", "iam-monitoring.sqlite"))
+DEFAULT_CONFIG_PATH = os.environ.get("IAM_MONITORING_CONFIG", "/etc/iam-monitoring.env")
+DEFAULT_STATE_DIR = os.path.dirname(DEFAULT_DB_PATH)
+DEFAULT_LOG_DIR = os.environ.get("IAM_MONITORING_LOG_DIR", "/var/log/iam-monitoring")
+DEFAULT_SERVICE_USER = os.environ.get("IAM_MONITORING_SERVICE_USER", "iam-monitoring")
 
 
 def read_version():
     version_path = os.path.join(APP_ROOT, "VERSION")
+    try:
+        with open(version_path, "r", encoding="utf-8") as handle:
+            return handle.read().strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def read_bundle_version(bundle_source_dir):
+    version_path = os.path.join(bundle_source_dir, "VERSION")
     try:
         with open(version_path, "r", encoding="utf-8") as handle:
             return handle.read().strip() or "unknown"
@@ -92,16 +105,47 @@ def _download_archive(archive_url, destination_path, proxy_settings):
         shutil.copyfileobj(response, handle)
 
 
-def _run_upgrade_script(archive_path, proxy_settings, log_path):
-    upgrade_script = os.path.join(APP_ROOT, "upgrade.sh")
+def _resolve_bundle_source_dir(extract_root):
+    direct_app = os.path.join(extract_root, "app.py")
+    direct_requirements = os.path.join(extract_root, "requirements.txt")
+    if os.path.isfile(direct_app) and os.path.isfile(direct_requirements):
+        return extract_root
+
+    for root, dirs, files in os.walk(extract_root):
+        if "app.py" in files and "requirements.txt" in files:
+            return root
+    raise RuntimeError("Could not locate the IAM dashboard bundle inside the downloaded archive.")
+
+
+def _extract_bundle_source_dir(archive_path, extract_root):
+    shutil.unpack_archive(archive_path, extract_root)
+    return _resolve_bundle_source_dir(extract_root)
+
+
+def _run_upgrade_script(bundle_source_dir, proxy_settings, log_path):
+    upgrade_script = os.path.join(bundle_source_dir, "upgrade.sh")
     env = _proxy_env(proxy_settings)
-    env["IAM_MONITORING_CONFIG"] = os.environ.get("IAM_MONITORING_CONFIG", "/etc/iam-monitoring.env")
+    env["IAM_MONITORING_CONFIG"] = DEFAULT_CONFIG_PATH
+    env["IAM_MONITORING_UPGRADE_HANDOFF"] = "1"
     with open(log_path, "a", encoding="utf-8", newline="\n") as handle:
         handle.write("---- upgrade.sh output ----\n")
         handle.flush()
         return subprocess.run(
-            ["bash", upgrade_script, "--archive", archive_path],
-            cwd=APP_ROOT,
+            [
+                "bash",
+                upgrade_script,
+                "--install-dir",
+                APP_ROOT,
+                "--config-file",
+                DEFAULT_CONFIG_PATH,
+                "--state-dir",
+                DEFAULT_STATE_DIR,
+                "--log-dir",
+                DEFAULT_LOG_DIR,
+                "--user",
+                DEFAULT_SERVICE_USER,
+            ],
+            cwd=bundle_source_dir,
             env=env,
             stdout=handle,
             stderr=subprocess.STDOUT,
@@ -142,6 +186,7 @@ def process_upgrade_request():
 
     temp_dir = tempfile.mkdtemp(prefix="iam-monitoring-upgrade-")
     archive_path = os.path.join(temp_dir, "github-upgrade.tar.gz")
+    extract_dir = os.path.join(temp_dir, "bundle")
     try:
         write_upgrade_status(
             current_db_path,
@@ -153,16 +198,51 @@ def process_upgrade_request():
         append_upgrade_log(current_db_path, "Downloading {0}".format(archive_url))
         _download_archive(archive_url, archive_path, proxy_settings)
         append_upgrade_log(current_db_path, "Downloaded archive to {0}".format(archive_path))
+        bundle_source_dir = _extract_bundle_source_dir(archive_path, extract_dir)
+        append_upgrade_log(current_db_path, "Resolved bundle source directory {0}".format(bundle_source_dir))
+        current_version = read_version()
+        bundle_version = read_bundle_version(bundle_source_dir)
+        write_upgrade_status(
+            current_db_path,
+            {
+                "currentVersion": current_version,
+                "targetVersion": bundle_version,
+            },
+        )
+        append_upgrade_log(
+            current_db_path,
+            "Current installed version is {0}; downloaded bundle version is {1}.".format(
+                current_version,
+                bundle_version,
+            ),
+        )
+        if bundle_version and current_version == bundle_version:
+            append_upgrade_log(
+                current_db_path,
+                "Downloaded bundle already matches the running version. No upgrade was applied.",
+            )
+            write_upgrade_status(
+                current_db_path,
+                {
+                    "status": "current",
+                    "finishedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "message": "You are already on the latest version.",
+                    "currentVersion": current_version,
+                    "targetVersion": bundle_version,
+                    "lastError": "",
+                },
+            )
+            return True
 
         write_upgrade_status(
             current_db_path,
             {
                 "status": "applying",
-                "message": "Running upgrade.sh. The dashboard service will restart during this step.",
+                "message": "Running the bundle upgrade script. The dashboard service will restart during this step.",
             },
         )
-        append_upgrade_log(current_db_path, "Running upgrade.sh with the downloaded archive.")
-        result = _run_upgrade_script(archive_path, proxy_settings, log_path)
+        append_upgrade_log(current_db_path, "Running bundled upgrade.sh from {0}.".format(bundle_source_dir))
+        result = _run_upgrade_script(bundle_source_dir, proxy_settings, log_path)
         if result.returncode != 0:
             raise RuntimeError("upgrade.sh exited with status {0}.".format(result.returncode))
 

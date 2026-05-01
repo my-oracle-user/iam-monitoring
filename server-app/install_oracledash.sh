@@ -192,7 +192,23 @@ resolve_source_dir() {
 
 validate_source_dir() {
   local source_dir="$1"
-  for required_path in app.py collect_environment.py collector.py config_store.py job_runner.py requirements.txt scheduler_jobs.sh static deploy; do
+  for required_path in \
+    app.py \
+    collect_environment.py \
+    collector.py \
+    config_store.py \
+    environment_registry.py \
+    job_runner.py \
+    notification_store.py \
+    support_store.py \
+    upgrade.sh \
+    upgrade_runtime.py \
+    upgrade_watcher.py \
+    requirements.txt \
+    scheduler_jobs.sh \
+    static \
+    deploy \
+    deploy/iam-monitoring-upgrader.service; do
     if [[ ! -e "${source_dir}/${required_path}" ]]; then
       echo "Bundle is missing ${required_path} in ${source_dir}" >&2
       exit 1

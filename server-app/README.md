@@ -33,10 +33,10 @@ That same Help page can also queue a GitHub-based in-place upgrade.
 
 ## Quick Upgrade
 
-From the Linux host, run the installed upgrader against the latest GitHub source bundle:
+From the Linux host, download the latest GitHub source bundle, extract it, and run the bundle's own upgrader:
 
 ```bash
-sudo bash -lc 'curl -L https://github.com/my-oracle-user/iam-monitoring/archive/refs/heads/main.tar.gz -o /tmp/iam-monitoring-main.tar.gz && bash /opt/iam-monitoring/upgrade.sh --archive /tmp/iam-monitoring-main.tar.gz'
+sudo bash -lc 'cd /tmp && rm -rf iam-monitoring-main && curl -L https://github.com/my-oracle-user/iam-monitoring/archive/refs/heads/main.tar.gz -o iam-monitoring-main.tar.gz && tar -xzf iam-monitoring-main.tar.gz && bash /tmp/iam-monitoring-main/server-app/upgrade.sh'
 ```
 
 That keeps the existing runtime env file, state directory, and saved environments in place.
@@ -48,7 +48,9 @@ sudo bash -lc '
 export http_proxy=http://www-proxy-phx.oraclecorp.com:80
 export https_proxy=http://www-proxy-phx.oraclecorp.com:80
 curl -L https://github.com/my-oracle-user/iam-monitoring/archive/refs/heads/main.tar.gz -o /tmp/iam-monitoring-main.tar.gz && \
-bash /opt/iam-monitoring/upgrade.sh --archive /tmp/iam-monitoring-main.tar.gz
+rm -rf /tmp/iam-monitoring-main && \
+tar -xzf /tmp/iam-monitoring-main.tar.gz -C /tmp && \
+bash /tmp/iam-monitoring-main/server-app/upgrade.sh
 '
 ```
 
@@ -63,8 +65,9 @@ without editing the Linux env file directly.
 `Administration -> Help` can now queue a GitHub-based in-place upgrade.
 
 - It is enabled by default from the Help page in this build.
+- It checks the GitHub `VERSION` first and says you are already on the latest version when no upgrade is needed.
 - It downloads the configured GitHub branch as a bundle.
-- It runs the existing `upgrade.sh` path through a root-owned helper service.
+- It runs the downloaded bundle's own `upgrade.sh` through a root-owned helper service.
 - The dashboard will be temporarily unavailable while `iam-monitoring` restarts.
 - The Help page shows queued/running/completed/failed status and the latest upgrade log tail.
 

@@ -53,8 +53,10 @@ from support_store import (
     save_update_proxy_settings,
 )
 from upgrade_runtime import (
+    append_upgrade_log,
     queue_github_upgrade,
     read_upgrade_status,
+    write_upgrade_status,
 )
 
 
@@ -175,7 +177,7 @@ def build_help_details():
             "Use Save And Bootstrap when adding an environment so the dashboard can switch from the initial SSH login to its installed runtime key for ongoing collection.",
             "Fresh installs start with an empty SQLite environment registry and pick up runtime settings from the local environment file.",
             "If GitHub update checks need an outbound proxy, save it under Administration / Help / GitHub Update Proxy. The Linux env file remains the service-level fallback.",
-            "GitHub upgrades can be queued from Administration / Help. The dashboard will disconnect briefly while the main service restarts on the new build.",
+            "GitHub upgrades can be queued from Administration / Help. The helper downloads the bundle and runs its bundled upgrade.sh before the main service restarts on the new build.",
         ],
     }
 
@@ -198,6 +200,17 @@ def github_version_url():
         GITHUB_REPO,
         GITHUB_BRANCH,
     )
+
+
+def build_github_upgrade_response(status_payload):
+    return {
+        "enabled": True,
+        "repoUrl": github_repo_url(),
+        "archiveUrl": github_archive_url(),
+        "branch": GITHUB_BRANCH,
+        "serviceName": UPGRADE_SERVICE_NAME,
+        "status": status_payload,
+    }
 
 
 def _letter_version_value(value):
@@ -771,7 +784,50 @@ class Handler(BaseHTTPRequestHandler):
     def handle_run_github_upgrade(self):
         try:
             load_runtime_config()
+            update_check = build_update_check_payload()
+            current_version = read_version()
+            remote_version = str(update_check.get("remoteVersion") or "").strip()
             update_proxy = merge_update_check_proxy_settings()
+
+            if update_check.get("status") == "error":
+                raise ValueError(update_check.get("message") or "GitHub version check failed.")
+
+            if update_check.get("status") in ("current", "ahead"):
+                status_name = "current" if update_check.get("status") == "current" else "ahead"
+                message = (
+                    "You are already on the latest version."
+                    if status_name == "current"
+                    else (update_check.get("message") or "This dashboard is already ahead of the GitHub branch.")
+                )
+                append_upgrade_log(DB_PATH, message)
+                status = write_upgrade_status(
+                    DB_PATH,
+                    {
+                        "status": status_name,
+                        "requestedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "startedAt": "",
+                        "finishedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "message": message,
+                        "repoUrl": github_repo_url(),
+                        "archiveUrl": github_archive_url(),
+                        "branch": GITHUB_BRANCH,
+                        "currentVersion": current_version,
+                        "targetVersion": remote_version or current_version,
+                        "requestId": "",
+                        "lastError": "",
+                    },
+                )
+                self.send_json(
+                    200,
+                    {
+                        "alreadyCurrent": True,
+                        "message": message,
+                        "updateCheck": update_check,
+                        "upgrade": build_github_upgrade_response(status),
+                    },
+                )
+                return
+
             status = queue_github_upgrade(
                 DB_PATH,
                 {
@@ -779,22 +835,18 @@ class Handler(BaseHTTPRequestHandler):
                     "repoUrl": github_repo_url(),
                     "archiveUrl": github_archive_url(),
                     "branch": GITHUB_BRANCH,
-                    "currentVersion": read_version(),
-                    "targetVersion": "",
+                    "currentVersion": current_version,
+                    "targetVersion": remote_version,
                     "proxySettings": update_proxy.get("effectiveSettings") or {},
                 },
             )
             self.send_json(
                 202,
                 {
-                    "upgrade": {
-                        "enabled": True,
-                        "repoUrl": github_repo_url(),
-                        "archiveUrl": github_archive_url(),
-                        "branch": GITHUB_BRANCH,
-                        "serviceName": UPGRADE_SERVICE_NAME,
-                        "status": status,
-                    }
+                    "alreadyCurrent": False,
+                    "message": update_check.get("message") or "GitHub upgrade queued.",
+                    "updateCheck": update_check,
+                    "upgrade": build_github_upgrade_response(status),
                 },
             )
         except Exception as exc:
