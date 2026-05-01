@@ -205,6 +205,22 @@ textarea {
     text-transform: uppercase;
 }
 
+.nav-group {
+    display: grid;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.nav-group-label {
+    margin: 6px 0 2px;
+    padding: 0 12px;
+    color: var(--ink-muted);
+    font-size: 0.78rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+
 .nav-item {
     width: 100%;
     padding: 14px 16px;
@@ -214,6 +230,12 @@ textarea {
     color: var(--ink);
     text-align: left;
     transition: background-color 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+
+.nav-item.is-subitem {
+    margin-left: 10px;
+    width: calc(100% - 10px);
+    padding-left: 18px;
 }
 
 .nav-item:hover {
@@ -465,6 +487,20 @@ textarea {
     padding: 18px;
 }
 
+.summary-tile.is-warning {
+    border-color: rgba(141, 101, 18, 0.28);
+    background: linear-gradient(180deg, rgba(248, 237, 213, 0.8), rgba(255, 255, 255, 1));
+}
+
+.summary-tile.is-critical {
+    border-color: rgba(167, 67, 52, 0.3);
+    background: linear-gradient(180deg, rgba(247, 229, 225, 0.9), rgba(255, 255, 255, 1));
+}
+
+.summary-tile.is-ok {
+    border-color: rgba(61, 111, 41, 0.2);
+}
+
 .tile-label {
     color: var(--ink-muted);
     font-size: 0.78rem;
@@ -479,6 +515,18 @@ textarea {
     font-weight: 700;
     line-height: 1.1;
     margin-bottom: 8px;
+}
+
+.tile-value-warning {
+    color: var(--amber);
+}
+
+.tile-value-critical {
+    color: var(--danger);
+}
+
+.tile-value-ok {
+    color: var(--green);
 }
 
 .tile-copy {
@@ -583,6 +631,23 @@ textarea {
 .definition-row dd {
     min-width: 0;
     word-break: break-word;
+}
+
+.definition-row.is-warning dd,
+.tone-warning {
+    color: var(--amber);
+    font-weight: 700;
+}
+
+.definition-row.is-critical dd,
+.tone-critical {
+    color: var(--danger);
+    font-weight: 700;
+}
+
+.definition-row.is-ok dd,
+.tone-ok {
+    color: var(--green);
 }
 
 .table-wrap {

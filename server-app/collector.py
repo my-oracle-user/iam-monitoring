@@ -3,6 +3,35 @@ import shlex
 import subprocess
 import time
 
+
+DEFAULT_SERVER_HEALTH_THRESHOLDS = {
+    "load1": {
+        "warning": {"ge": 8},
+        "critical": {"ge": 16},
+    },
+    "memoryUsedPercent": {
+        "warning": {"ge": 85},
+        "critical": {"ge": 92},
+    },
+    "rootDiskUsedPercent": {
+        "warning": {"ge": 70},
+        "critical": {"ge": 80},
+    },
+    "refreshDiskUsedPercent": {
+        "warning": {"ge": 70},
+        "critical": {"ge": 80},
+    },
+    "cpuIoWaitPercent": {
+        "warning": {"ge": 15},
+        "critical": {"ge": 30},
+    },
+    "cpuIdlePercent": {
+        "warning": {"le": 15},
+        "critical": {"le": 5},
+    },
+}
+
+
 def lines(text):
     if not text:
         return []
@@ -22,6 +51,134 @@ def safe_float(value):
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def threshold_value(value):
+    if value in (None, "", "-"):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def threshold_matches(value, rule):
+    if not isinstance(rule, dict) or not rule:
+        return False
+    numeric_value = threshold_value(value)
+    matched = False
+    for operator, threshold in rule.items():
+        operator = str(operator).strip().lower()
+        numeric_threshold = threshold_value(threshold)
+        if operator in ("gt", "ge", "lt", "le"):
+            if numeric_value is None or numeric_threshold is None:
+                return False
+            matched = True
+            if operator == "gt" and not (numeric_value > numeric_threshold):
+                return False
+            if operator == "ge" and not (numeric_value >= numeric_threshold):
+                return False
+            if operator == "lt" and not (numeric_value < numeric_threshold):
+                return False
+            if operator == "le" and not (numeric_value <= numeric_threshold):
+                return False
+            continue
+        left = str(value).strip().lower()
+        right = str(threshold).strip().lower()
+        matched = True
+        if operator == "eq" and left != right:
+            return False
+        if operator == "ne" and left == right:
+            return False
+    return matched
+
+
+def threshold_severity(value, rules):
+    rules = rules or {}
+    if threshold_matches(value, rules.get("critical")):
+        return "critical"
+    if threshold_matches(value, rules.get("warning")):
+        return "warning"
+    return "healthy"
+
+
+def build_server_health(server_snapshot):
+    server_snapshot = server_snapshot or {}
+    if not server_snapshot.get("reachable"):
+        return {
+            "status": "down",
+            "checks": {},
+            "thresholds": DEFAULT_SERVER_HEALTH_THRESHOLDS,
+        }
+
+    uptime = server_snapshot.get("uptime") or {}
+    memory = server_snapshot.get("memory") or {}
+    root_disk = server_snapshot.get("rootDisk") or {}
+    refresh_disk = server_snapshot.get("refreshDisk") or {}
+    cpu_breakdown = uptime.get("cpuBreakdown") or {}
+
+    checks = {
+        "load1": {
+            "label": "Load Average (1m)",
+            "value": uptime.get("load1"),
+            "severity": threshold_severity(uptime.get("load1"), DEFAULT_SERVER_HEALTH_THRESHOLDS["load1"]),
+        },
+        "memoryUsedPercent": {
+            "label": "Memory Used",
+            "value": memory.get("usedPercent"),
+            "severity": threshold_severity(
+                memory.get("usedPercent"),
+                DEFAULT_SERVER_HEALTH_THRESHOLDS["memoryUsedPercent"],
+            ),
+        },
+        "rootDiskUsedPercent": {
+            "label": "Root Disk Used",
+            "value": root_disk.get("usedPercent"),
+            "severity": threshold_severity(
+                root_disk.get("usedPercent"),
+                DEFAULT_SERVER_HEALTH_THRESHOLDS["rootDiskUsedPercent"],
+            ),
+        },
+        "refreshDiskUsedPercent": {
+            "label": "Refresh Disk Used",
+            "value": refresh_disk.get("usedPercent"),
+            "severity": threshold_severity(
+                refresh_disk.get("usedPercent"),
+                DEFAULT_SERVER_HEALTH_THRESHOLDS["refreshDiskUsedPercent"],
+            ) if refresh_disk.get("size") else "healthy",
+        },
+        "cpuIoWaitPercent": {
+            "label": "CPU IO Wait",
+            "value": cpu_breakdown.get("ioWaitPercent"),
+            "severity": threshold_severity(
+                cpu_breakdown.get("ioWaitPercent"),
+                DEFAULT_SERVER_HEALTH_THRESHOLDS["cpuIoWaitPercent"],
+            ),
+        },
+        "cpuIdlePercent": {
+            "label": "CPU Idle",
+            "value": cpu_breakdown.get("idlePercent"),
+            "severity": threshold_severity(
+                cpu_breakdown.get("idlePercent"),
+                DEFAULT_SERVER_HEALTH_THRESHOLDS["cpuIdlePercent"],
+            ),
+        },
+    }
+
+    overall = "healthy"
+    for item in checks.values():
+        severity = item.get("severity")
+        if severity == "critical":
+            overall = "critical"
+            break
+        if severity == "warning" and overall == "healthy":
+            overall = "warning"
+
+    return {
+        "status": overall,
+        "checks": checks,
+        "thresholds": DEFAULT_SERVER_HEALTH_THRESHOLDS,
+    }
 
 
 def run_local(command):
@@ -799,22 +956,43 @@ def combine_statuses(*statuses):
     return "healthy"
 
 
+def app_checks_status(app_checks):
+    if not app_checks:
+        return "healthy"
+    healthy = len([item for item in app_checks if item["status"] == "healthy"])
+    warning = len([item for item in app_checks if item["status"] == "warning"])
+    if healthy == len(app_checks):
+        return "healthy"
+    if healthy > 0 or warning > 0:
+        return "warning"
+    return "warning"
+
+
 def target_status(server, app_checks, product_metrics=None):
     if not server.get("reachable"):
         return "down"
-    if not app_checks:
-        app_status = "healthy"
-    else:
-        healthy = len([item for item in app_checks if item["status"] == "healthy"])
-        warning = len([item for item in app_checks if item["status"] == "warning"])
-        if healthy == len(app_checks):
-            app_status = "healthy"
-        elif healthy > 0 or warning > 0:
-            app_status = "warning"
-        else:
-            app_status = "down"
+    app_status = app_checks_status(app_checks)
+    server_health_status = ((server.get("health") or {}).get("status")) or "healthy"
+    if server_health_status == "critical":
+        server_health_status = "warning"
+    return combine_statuses(app_status, product_metrics_status(product_metrics), server_health_status)
 
-    return combine_statuses(app_status, product_metrics_status(product_metrics))
+
+def hydrate_dashboard_payload(dashboard_payload):
+    dashboard_payload = dict(dashboard_payload or {})
+    server = dict(dashboard_payload.get("server") or {})
+    if server and not server.get("health"):
+        server["health"] = build_server_health(server)
+    dashboard_payload["server"] = server
+    if server.get("reachable"):
+        status = target_status(
+            server,
+            dashboard_payload.get("appChecks") or [],
+            dashboard_payload.get("productMetrics") or {},
+        )
+        dashboard_payload["status"] = status
+        server["status"] = status
+    return dashboard_payload
 
 
 def collect_monitoring_server(monitoring_config):
@@ -827,6 +1005,7 @@ def collect_monitoring_server(monitoring_config):
     status = "healthy" if snapshot.get("reachable") else "down"
     if snapshot.get("reachable"):
         snapshot["status"] = status
+        snapshot["health"] = build_server_health(snapshot)
 
     return {
         "name": monitoring_config.get("name") or "IAM Monitoring Server",
@@ -848,6 +1027,7 @@ def collect_environment_dashboard(environment):
         script_directory=server_metrics.get("scriptDirectory"),
         process_matchers=server_metrics.get("processMatchers") or [],
     )
+    server["health"] = build_server_health(server)
     app_checks = collect_app_checks(target, environment)
     product_metrics = get_product_metrics(target, environment, app_checks)
     status = target_status(server, app_checks, product_metrics)
@@ -921,6 +1101,11 @@ def build_environment_error_dashboard(environment, error_message):
             "status": "down",
             "actualHostname": None,
             "error": error_message,
+            "health": {
+                "status": "down",
+                "checks": {},
+                "thresholds": DEFAULT_SERVER_HEALTH_THRESHOLDS,
+            },
         },
         "appChecks": [],
         "productMetrics": {},
@@ -938,6 +1123,7 @@ def build_environment_error_dashboard(environment, error_message):
 
 
 def extract_environment_overview(dashboard_payload):
+    dashboard_payload = hydrate_dashboard_payload(dashboard_payload)
     environment = dashboard_payload.get("environment") or {}
     server = dashboard_payload.get("server") or {}
     summary = dashboard_payload.get("summary") or {}

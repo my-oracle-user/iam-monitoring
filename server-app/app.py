@@ -17,6 +17,7 @@ from collector import (
     collect_environment_dashboard,
     collect_monitoring_server,
     extract_environment_overview,
+    hydrate_dashboard_payload,
 )
 from config_store import (
     load_config,
@@ -229,6 +230,7 @@ class DashboardCache(object):
 
         if not payload:
             payload = build_pending_dashboard(environment)
+        payload = hydrate_dashboard_payload(payload)
         payload["job"] = read_job_status(DB_PATH, environment_id)
         return payload
 
