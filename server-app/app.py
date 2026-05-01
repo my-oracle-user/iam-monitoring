@@ -11,6 +11,7 @@ from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 from urllib.parse import parse_qs, urlparse
+from urllib.request import Request, urlopen
 
 from collector import (
     build_environment_error_dashboard,
@@ -66,6 +67,9 @@ CONFIG_FILE_PATH = os.environ.get("IAM_MONITORING_CONFIG", "/etc/iam-monitoring.
 SERVICE_NAME = "iam-monitoring"
 SERVICE_FILE_PATH = "/etc/systemd/system/{0}.service".format(SERVICE_NAME)
 CRON_FILE_PATH = "/etc/cron.d/iam-monitoring"
+GITHUB_OWNER = os.environ.get("IAM_MONITORING_GITHUB_OWNER", "my-oracle-user")
+GITHUB_REPO = os.environ.get("IAM_MONITORING_GITHUB_REPO", "iam-monitoring")
+GITHUB_BRANCH = os.environ.get("IAM_MONITORING_GITHUB_BRANCH", "main")
 
 
 def read_version():
@@ -146,6 +150,97 @@ def build_help_details():
             "Fresh installs start with an empty SQLite environment registry and pick up runtime settings from the local environment file.",
         ],
     }
+
+
+def github_repo_url():
+    return "https://github.com/{0}/{1}".format(GITHUB_OWNER, GITHUB_REPO)
+
+
+def github_version_url():
+    return "https://raw.githubusercontent.com/{0}/{1}/{2}/server-app/VERSION".format(
+        GITHUB_OWNER,
+        GITHUB_REPO,
+        GITHUB_BRANCH,
+    )
+
+
+def _letter_version_value(value):
+    total = 0
+    for character in str(value or "").strip().lower():
+        if not ("a" <= character <= "z"):
+            return None
+        total = (total * 26) + (ord(character) - 96)
+    return total
+
+
+def _parse_version_value(value):
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    match = re.match(r"^(\d+)([a-z]+)$", text)
+    if match:
+        return ("letter", int(match.group(1)), _letter_version_value(match.group(2)))
+    if re.match(r"^\d+(?:\.\d+)+$", text):
+        return ("dot", tuple(int(part) for part in text.split(".")))
+    if re.match(r"^\d+$", text):
+        return ("number", int(text))
+    return None
+
+
+def compare_version_values(local_version, remote_version):
+    if str(local_version or "").strip() == str(remote_version or "").strip():
+        return 0
+    local_parsed = _parse_version_value(local_version)
+    remote_parsed = _parse_version_value(remote_version)
+    if not local_parsed or not remote_parsed or local_parsed[0] != remote_parsed[0]:
+        return None
+    if local_parsed[1:] < remote_parsed[1:]:
+        return -1
+    if local_parsed[1:] > remote_parsed[1:]:
+        return 1
+    return 0
+
+
+def build_update_check_payload():
+    current_version = read_version()
+    payload = {
+        "currentVersion": current_version,
+        "remoteVersion": "",
+        "repoUrl": github_repo_url(),
+        "versionUrl": github_version_url(),
+        "branch": GITHUB_BRANCH,
+        "checkedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "status": "idle",
+        "message": "",
+    }
+    try:
+        request = Request(payload["versionUrl"], headers={"User-Agent": "iam-monitoring-update-check"})
+        with urlopen(request, timeout=6) as response:
+            remote_version = response.read().decode("utf-8").strip()
+        if not remote_version:
+            raise ValueError("GitHub did not return a VERSION value.")
+        payload["remoteVersion"] = remote_version
+        comparison = compare_version_values(current_version, remote_version)
+        if comparison == 0:
+            payload["status"] = "current"
+            payload["message"] = "This dashboard is up to date with GitHub {0}.".format(GITHUB_BRANCH)
+        elif comparison == -1:
+            payload["status"] = "update_available"
+            payload["message"] = "GitHub {0} has a newer version available: {1}.".format(GITHUB_BRANCH, remote_version)
+        elif comparison == 1:
+            payload["status"] = "ahead"
+            payload["message"] = "This dashboard is ahead of GitHub {0}.".format(GITHUB_BRANCH)
+        else:
+            payload["status"] = "different"
+            payload["message"] = "GitHub {0} reports version {1}; compare it with the running version {2}.".format(
+                GITHUB_BRANCH,
+                remote_version,
+                current_version,
+            )
+    except Exception as exc:
+        payload["status"] = "error"
+        payload["message"] = "GitHub update check failed: {0}".format(str(exc))
+    return payload
 
 
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
@@ -348,6 +443,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/admin/notifications":
             return self.handle_admin_notifications()
 
+        if path == "/api/admin/updates/check":
+            return self.handle_admin_update_check()
+
         match = re.match(r"^/api/admin/environments/([^/]+)/jobs$", path)
         if match:
             return self.handle_environment_jobs(match.group(1))
@@ -458,6 +556,24 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, notification_payload(DB_PATH))
         except Exception as exc:
             self.send_json(500, {"error": str(exc)})
+
+    def handle_admin_update_check(self):
+        try:
+            self.send_json(200, build_update_check_payload())
+        except Exception as exc:
+            self.send_json(
+                200,
+                {
+                    "currentVersion": read_version(),
+                    "remoteVersion": "",
+                    "repoUrl": github_repo_url(),
+                    "versionUrl": github_version_url(),
+                    "branch": GITHUB_BRANCH,
+                    "checkedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "status": "error",
+                    "message": "GitHub update check failed: {0}".format(str(exc)),
+                },
+            )
 
     def handle_create_environment(self):
         try:

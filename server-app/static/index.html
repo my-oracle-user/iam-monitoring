@@ -4,8 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Oracle Identity &amp; Access Management Dashboard</title>
-    <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg?v=1j">
-    <link rel="shortcut icon" href="/assets/favicon.svg?v=1j">
+    <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg?v=1k">
+    <link rel="shortcut icon" href="/assets/favicon.svg?v=1k">
     <link rel="stylesheet" href="/assets/styles.css">
 </head>
 <body>
@@ -20,6 +20,10 @@
             </div>
 
             <div class="topbar-context">
+                <div class="topbar-update">
+                    <button id="check-updates-button" class="topbar-update-button" type="button" data-check-updates>Check For Updates</button>
+                    <span id="update-check-status" class="topbar-update-status">Version loading</span>
+                </div>
                 <label for="context-switcher">Context</label>
                 <select id="context-switcher"></select>
                 <img class="topbar-avatar" src="/assets/oci/user-icon.png" alt="">

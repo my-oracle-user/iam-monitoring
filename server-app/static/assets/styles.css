@@ -149,6 +149,82 @@ img {
     justify-content: flex-end;
 }
 
+.topbar-update {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-right: 6px;
+}
+
+.topbar-update-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 40px;
+    padding: 0 14px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #f7f4f1;
+    font-weight: 700;
+    transition: background-color 140ms ease, border-color 140ms ease, transform 140ms ease;
+}
+
+.topbar-update-button:hover {
+    background: rgba(255, 255, 255, 0.14);
+    border-color: rgba(255, 255, 255, 0.22);
+    transform: translateY(-1px);
+}
+
+.topbar-update-button:disabled {
+    opacity: 0.72;
+    cursor: default;
+    transform: none;
+}
+
+.topbar-update-status {
+    display: inline-flex;
+    align-items: center;
+    min-height: 30px;
+    padding: 0 12px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 999px;
+    color: rgba(247, 244, 241, 0.86);
+    background: rgba(255, 255, 255, 0.06);
+    font-size: 0.82rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.topbar-update-status.is-checking {
+    color: #f7f4f1;
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+.topbar-update-status.is-current {
+    color: #9fe18a;
+    border-color: rgba(159, 225, 138, 0.24);
+    background: rgba(61, 111, 41, 0.22);
+}
+
+.topbar-update-status.is-update {
+    color: #ffd18a;
+    border-color: rgba(255, 209, 138, 0.24);
+    background: rgba(141, 101, 18, 0.22);
+}
+
+.topbar-update-status.is-ahead {
+    color: #9ad6f0;
+    border-color: rgba(154, 214, 240, 0.24);
+    background: rgba(0, 107, 143, 0.22);
+}
+
+.topbar-update-status.is-error {
+    color: #ffb7ae;
+    border-color: rgba(255, 183, 174, 0.24);
+    background: rgba(167, 67, 52, 0.22);
+}
+
 .topbar-context label {
     font-size: 0.72rem;
     font-weight: 700;
@@ -1071,6 +1147,12 @@ tbody tr:last-child td {
         justify-content: flex-start;
     }
 
+    .topbar-update {
+        width: 100%;
+        justify-content: space-between;
+        margin-right: 0;
+    }
+
     .page-generated-at {
         text-align: left;
     }
@@ -1124,6 +1206,17 @@ tbody tr:last-child td {
 
     .topbar-context select {
         min-width: 100%;
+    }
+
+    .topbar-update {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .topbar-update-status,
+    .topbar-update-button {
+        width: 100%;
+        justify-content: center;
     }
 
     .sidebar-nav {
