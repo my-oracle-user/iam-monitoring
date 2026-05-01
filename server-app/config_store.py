@@ -126,6 +126,71 @@ def normalize_ssh_mode(value, fallback="root_password"):
     return fallback
 
 
+def normalize_ssh_profile_payload(
+    payload,
+    existing=None,
+    default_host="",
+    default_username="root",
+    default_port=22,
+    default_mode="root_password",
+):
+    payload = payload or {}
+    existing = existing or {}
+    ssh_mode = normalize_ssh_mode(payload.get("sshMode") or existing.get("sshMode"), default_mode)
+    profile = {
+        "mode": "ssh",
+        "host": str(payload.get("host") or existing.get("host") or default_host).strip(),
+        "port": as_int(payload.get("port") or existing.get("port") or default_port, default_port),
+        "username": str(payload.get("username") or existing.get("username") or default_username).strip() or default_username,
+        "sshMode": ssh_mode,
+        "authType": "private_key" if ssh_mode.endswith("_key") else "password",
+        "sudoRequired": ssh_mode.endswith("_sudo"),
+        "password": preserve_secret(
+            payload.get("password"),
+            existing.get("password"),
+            allow_blank=coerce_bool(payload.get("clearPassword"), False),
+        ),
+        "privateKeyPath": str(payload.get("privateKeyPath") or existing.get("privateKeyPath") or "").strip(),
+        "passphrase": preserve_secret(
+            payload.get("passphrase"),
+            existing.get("passphrase"),
+            allow_blank=coerce_bool(payload.get("clearPassphrase"), False),
+        ),
+    }
+    if ssh_mode.startswith("root_"):
+        profile["username"] = "root"
+        profile["sudoRequired"] = False
+    return profile
+
+
+def repair_bootstrap_server_profile(environment):
+    environment = environment or {}
+    server = environment.get("server") or {}
+    bootstrap = environment.get("bootstrap") or {}
+    initial_mode = normalize_ssh_mode(bootstrap.get("initialSshMode"), "")
+    runtime_key_path = str(bootstrap.get("runtimeKeyPath") or "").strip()
+    bootstrap_ready = str(bootstrap.get("status") or "").strip().lower() == "ready"
+    current_mode = normalize_ssh_mode(server.get("sshMode"), "")
+    current_key_path = str(server.get("privateKeyPath") or "").strip()
+
+    if not initial_mode or not bootstrap_ready:
+        return environment
+
+    # Older builds overwrote the saved SSH profile with the runtime key profile.
+    # Repair the user-facing server settings so the UI still reflects the original bootstrap login.
+    if current_mode in ("root_key", "user_key_sudo") or (runtime_key_path and current_key_path == runtime_key_path):
+        server["sshMode"] = initial_mode
+        server["authType"] = "private_key" if "_key" in initial_mode else "password"
+        if server["authType"] == "password":
+            server["privateKeyPath"] = ""
+            server["passphrase"] = ""
+        elif runtime_key_path and current_key_path == runtime_key_path:
+            server["privateKeyPath"] = ""
+        environment["server"] = server
+
+    return environment
+
+
 def default_process_matchers(products):
     matchers = []
     if products.get("oam") or products.get("weblogic"):
@@ -170,6 +235,22 @@ def default_environment(name=None, host=None):
             "processMatchers": default_process_matchers(products),
         },
         "weblogic": {
+            "enabled": False,
+            "adminUrl": "",
+            "adminUsername": "weblogic",
+            "adminPassword": "",
+            "adminHost": {
+                "mode": "ssh",
+                "host": "",
+                "port": 22,
+                "username": "root",
+                "sshMode": "root_password",
+                "authType": "password",
+                "sudoRequired": False,
+                "password": "",
+                "privateKeyPath": "",
+                "passphrase": "",
+            },
             "jstatPath": "/refresh/home/jdk-21.0.5/bin/jstat",
             "serverNames": ["AdminServer", "oam_server1"],
         },
@@ -281,6 +362,7 @@ def normalize_environment(payload, existing=None):
     oud_payload = payload.get("oud") or {}
     oig_payload = payload.get("oig") or {}
     weblogic_payload = payload.get("weblogic") or {}
+    existing_weblogic = existing.get("weblogic") or {}
     operations_payload = payload.get("operations") or {}
     environment_type = normalize_environment_type(
         payload.get("environmentType"),
@@ -319,6 +401,10 @@ def normalize_environment(payload, existing=None):
         4444,
     )
     derived_ldap_url = "ldap://localhost:{0}".format(ldap_port)
+    weblogic_enabled = coerce_bool(
+        weblogic_payload.get("enabled"),
+        existing_weblogic.get("enabled", products.get("weblogic")),
+    )
 
     environment = {
         "id": str(payload.get("id") or existing.get("id") or base.get("id")).strip() or base.get("id"),
@@ -361,14 +447,39 @@ def normalize_environment(payload, existing=None):
             ),
         },
         "weblogic": {
+            "enabled": weblogic_enabled,
+            "adminUrl": str(
+                weblogic_payload.get("adminUrl")
+                or existing_weblogic.get("adminUrl")
+                or ""
+            ).strip(),
+            "adminUsername": str(
+                weblogic_payload.get("adminUsername")
+                or existing_weblogic.get("adminUsername")
+                or base["weblogic"].get("adminUsername")
+                or "weblogic"
+            ).strip() or "weblogic",
+            "adminPassword": preserve_secret(
+                weblogic_payload.get("adminPassword"),
+                existing_weblogic.get("adminPassword"),
+                allow_blank=coerce_bool(weblogic_payload.get("clearAdminPassword"), False),
+            ),
+            "adminHost": normalize_ssh_profile_payload(
+                weblogic_payload.get("adminHost"),
+                existing_weblogic.get("adminHost"),
+                default_host="",
+                default_username="root",
+                default_port=22,
+                default_mode="root_password",
+            ),
             "jstatPath": str(
                 weblogic_payload.get("jstatPath")
-                or (existing.get("weblogic") or {}).get("jstatPath")
+                or existing_weblogic.get("jstatPath")
                 or base["weblogic"]["jstatPath"]
             ).strip(),
             "serverNames": parse_csv_or_list(
                 weblogic_payload.get("serverNames"),
-                (existing.get("weblogic") or {}).get("serverNames") or base["weblogic"]["serverNames"],
+                existing_weblogic.get("serverNames") or base["weblogic"]["serverNames"],
             ),
         },
         "oam": {
@@ -515,6 +626,8 @@ def normalize_environment(payload, existing=None):
 
     if not environment["oud"]["checks"] and products.get("oud"):
         environment["oud"]["checks"] = deep_copy(DEFAULT_OUD_CHECKS)
+
+    environment["weblogic"]["enabled"] = bool(products.get("weblogic"))
 
     return environment
 
@@ -693,6 +806,8 @@ def serialize_environment(environment, include_sensitive=False):
     environment = environment or {}
     server = environment.get("server") or {}
     oud = environment.get("oud") or {}
+    weblogic = environment.get("weblogic") or {}
+    weblogic_admin_host = weblogic.get("adminHost") or {}
 
     payload = {
         "id": environment.get("id"),
@@ -713,7 +828,27 @@ def serialize_environment(environment, include_sensitive=False):
         },
         "products": deep_copy(environment.get("products") or {}),
         "serverMetrics": deep_copy(environment.get("serverMetrics") or {}),
-        "weblogic": deep_copy(environment.get("weblogic") or {}),
+        "weblogic": {
+            "enabled": bool(weblogic.get("enabled")),
+            "adminUrl": weblogic.get("adminUrl") or "",
+            "adminUsername": weblogic.get("adminUsername") or "",
+            "adminPassword": "",
+            "hasAdminPassword": bool(weblogic.get("adminPassword")),
+            "adminHost": {
+                "mode": weblogic_admin_host.get("mode") or "ssh",
+                "host": weblogic_admin_host.get("host") or "",
+                "port": weblogic_admin_host.get("port") or 22,
+                "username": weblogic_admin_host.get("username") or "",
+                "sshMode": normalize_ssh_mode(weblogic_admin_host.get("sshMode"), "root_password"),
+                "authType": weblogic_admin_host.get("authType") or "password",
+                "sudoRequired": bool(weblogic_admin_host.get("sudoRequired")),
+                "privateKeyPath": weblogic_admin_host.get("privateKeyPath") or "",
+                "hasPassword": bool(weblogic_admin_host.get("password")),
+                "hasPassphrase": bool(weblogic_admin_host.get("passphrase")),
+            },
+            "jstatPath": weblogic.get("jstatPath") or "",
+            "serverNames": deep_copy(weblogic.get("serverNames") or []),
+        },
         "oam": deep_copy(environment.get("oam") or {}),
         "collection": deep_copy(environment.get("collection") or {}),
         "bootstrap": deep_copy(environment.get("bootstrap") or {}),
@@ -738,6 +873,9 @@ def serialize_environment(environment, include_sensitive=False):
     if include_sensitive:
         payload["server"]["password"] = server.get("password") or ""
         payload["server"]["passphrase"] = server.get("passphrase") or ""
+        payload["weblogic"]["adminPassword"] = weblogic.get("adminPassword") or ""
+        payload["weblogic"]["adminHost"]["password"] = weblogic_admin_host.get("password") or ""
+        payload["weblogic"]["adminHost"]["passphrase"] = weblogic_admin_host.get("passphrase") or ""
         payload["oud"]["bindPassword"] = oud.get("bindPassword") or ""
 
     return payload

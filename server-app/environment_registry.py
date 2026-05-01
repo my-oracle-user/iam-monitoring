@@ -3,7 +3,7 @@ import os
 import sqlite3
 from datetime import datetime
 
-from config_store import normalize_environment, serialize_environment, slugify
+from config_store import normalize_environment, repair_bootstrap_server_profile, serialize_environment, slugify
 
 
 def _now_utc_iso():
@@ -46,7 +46,7 @@ def _row_to_environment(row):
     payload.setdefault("name", row["environment_name"])
     payload.setdefault("server", {})
     payload["server"].setdefault("host", row["server_host"] or "")
-    return payload
+    return repair_bootstrap_server_profile(payload)
 
 
 def _list_raw(db_path):

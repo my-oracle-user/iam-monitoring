@@ -570,17 +570,54 @@ def build_monitoring_target(monitoring_config):
 
 def build_environment_target(environment):
     server = environment.get("server") or {}
+    bootstrap = environment.get("bootstrap") or {}
+    username = server.get("username") or "root"
+    sudo_required = bool(server.get("sudoRequired"))
+    runtime_key_path = str(bootstrap.get("runtimeKeyPath") or "").strip()
+    bootstrap_ready = str(bootstrap.get("status") or "").strip().lower() == "ready"
+    if bootstrap_ready and runtime_key_path:
+        return {
+            "mode": server.get("mode") or "ssh",
+            "host": server.get("host") or "",
+            "port": server.get("port") or 22,
+            "username": username,
+            "sshMode": "root_key" if username == "root" and not sudo_required else "user_key_sudo",
+            "authType": "private_key",
+            "sudoRequired": sudo_required,
+            "password": "",
+            "privateKeyPath": runtime_key_path,
+            "passphrase": "",
+        }
     return {
         "mode": server.get("mode") or "ssh",
         "host": server.get("host") or "",
         "port": server.get("port") or 22,
-        "username": server.get("username") or "root",
+        "username": username,
         "sshMode": server.get("sshMode") or "root_password",
         "authType": server.get("authType") or "password",
-        "sudoRequired": bool(server.get("sudoRequired")),
+        "sudoRequired": sudo_required,
         "password": server.get("password") or "",
         "privateKeyPath": server.get("privateKeyPath") or "",
         "passphrase": server.get("passphrase") or "",
+    }
+
+
+def build_weblogic_target(environment, fallback_target=None):
+    weblogic = environment.get("weblogic") or {}
+    admin_host = weblogic.get("adminHost") or {}
+    if not str(admin_host.get("host") or "").strip():
+        return fallback_target or build_environment_target(environment)
+    return {
+        "mode": admin_host.get("mode") or "ssh",
+        "host": admin_host.get("host") or "",
+        "port": admin_host.get("port") or 22,
+        "username": admin_host.get("username") or "root",
+        "sshMode": admin_host.get("sshMode") or "root_password",
+        "authType": admin_host.get("authType") or "password",
+        "sudoRequired": bool(admin_host.get("sudoRequired")),
+        "password": admin_host.get("password") or "",
+        "privateKeyPath": admin_host.get("privateKeyPath") or "",
+        "passphrase": admin_host.get("passphrase") or "",
     }
 
 
@@ -762,6 +799,7 @@ def get_weblogic_metrics(target, environment):
     if not products.get("weblogic") and not products.get("oam"):
         return None
 
+    target = build_weblogic_target(environment, target)
     settings = environment.get("weblogic") or {}
     server_names = settings.get("serverNames") or []
     jstat_path = settings.get("jstatPath")

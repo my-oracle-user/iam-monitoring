@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import argparse
 import sys
+import time
 
+from environment_registry import get_environment
 from job_runner import (
     _read_state_file,
     _job_state_path,
@@ -27,6 +29,27 @@ def mark_job_finished(db_path, environment_id, trigger, exit_code):
     )
 
 
+def _local_log_timestamp():
+    return time.strftime("%Y-%m-%d %I:%M:%S %p %Z", time.localtime())
+
+
+def _environment_label(db_path, environment_id):
+    environment = get_environment(db_path, environment_id, include_secret=True) or {}
+    name = str(environment.get("name") or "").strip()
+    env_id = str(environment_id or "").strip()
+    if name and env_id:
+        return "{0} ({1})".format(name, env_id)
+    return name or env_id or "Environment"
+
+
+def _log_line(db_path, environment_id, message):
+    return "[{0}] [{1}] {2}".format(
+        _local_log_timestamp(),
+        _environment_label(db_path, environment_id),
+        message,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run IAM environment collection jobs.")
     parser.add_argument("--db-path", required=True, help="SQLite registry path")
@@ -48,20 +71,20 @@ def main():
     if not args.env_id:
         raise ValueError("--env-id is required unless --scheduler is used.")
 
-    print("Starting environment collector for {0}.".format(args.env_id))
+    print(_log_line(args.db_path, args.env_id, "Starting environment collector."))
     exit_code = 0
     try:
         dashboard = collect_environment_now(args.db_path, args.env_id, trigger=args.trigger)
         print(
-            "Collector finished for {0} with status {1} at {2}.".format(
+            _log_line(
+                args.db_path,
                 args.env_id,
-                dashboard.get("status") or "unknown",
-                dashboard.get("generatedAtLocal") or dashboard.get("generatedAt") or "n/a",
+                "Collector finished with status {0}.".format(dashboard.get("status") or "unknown"),
             )
         )
     except Exception as exc:
         exit_code = 1
-        print("Collector failed for {0}: {1}".format(args.env_id, exc))
+        print(_log_line(args.db_path, args.env_id, "Collector failed: {0}".format(exc)))
     mark_job_finished(args.db_path, args.env_id, args.trigger, exit_code)
     return exit_code
 

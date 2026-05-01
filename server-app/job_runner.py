@@ -405,14 +405,6 @@ def bootstrap_environment_runtime(db_path, environment_id):
             "Check that the SSH user home and authorized_keys permissions allow key login."
         )
 
-    server["authType"] = "private_key"
-    server["privateKeyPath"] = runtime_key_path
-    server["passphrase"] = ""
-    server["password"] = ""
-    server["clearPassword"] = True
-    server["clearPassphrase"] = True
-    server["sshMode"] = runtime_target.get("sshMode")
-
     bootstrap = environment.get("bootstrap") or {}
     bootstrap["status"] = "ready"
     bootstrap["strategy"] = "initial_ssh_then_runtime_key"
@@ -428,10 +420,6 @@ def bootstrap_environment_runtime(db_path, environment_id):
     environment["server"] = server
     environment["bootstrap"] = bootstrap
     saved = save_environment(db_path, environment, environment_id=environment_id)
-    saved_server = saved.get("server") or {}
-    saved_server.pop("clearPassword", None)
-    saved_server.pop("clearPassphrase", None)
-    saved["server"] = saved_server
     runtime_env_path = write_runtime_env_file(db_path, saved)
     saved["bootstrap"]["runtimeEnvPath"] = runtime_env_path
     save_environment(db_path, saved, environment_id=environment_id)
