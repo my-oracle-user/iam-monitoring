@@ -378,14 +378,15 @@ def _bootstrap_target(environment):
 def _runtime_target(environment, private_key_path):
     server = environment.get("server") or {}
     username = str(server.get("username") or "root").strip() or "root"
+    sudo_required = bool(server.get("sudoRequired"))
     return {
         "mode": "ssh",
         "host": server.get("host") or "",
         "port": server.get("port") or 22,
         "username": username,
-        "sshMode": "root_key" if username == "root" else "user_key_sudo",
+        "sshMode": "root_key" if username == "root" and not sudo_required else ("user_key_sudo" if sudo_required else "user_key"),
         "authType": "private_key",
-        "sudoRequired": bool(server.get("sudoRequired")),
+        "sudoRequired": sudo_required,
         "password": "",
         "privateKeyPath": private_key_path,
         "passphrase": "",

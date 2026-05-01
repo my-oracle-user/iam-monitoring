@@ -1029,6 +1029,23 @@ tbody tr:last-child td {
     line-height: 1.45;
 }
 
+.key-upload-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+
+.key-upload-input {
+    flex: 1 1 260px;
+    min-width: 220px;
+}
+
+.key-upload-status {
+    word-break: break-all;
+}
+
 .checkbox-field {
     display: flex;
     align-items: center;

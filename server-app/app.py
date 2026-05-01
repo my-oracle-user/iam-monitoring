@@ -7,6 +7,7 @@ import smtplib
 import ssl
 import threading
 import time
+import uuid
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
@@ -19,9 +20,11 @@ from collector import (
     collect_monitoring_server,
     extract_environment_overview,
     hydrate_dashboard_payload,
+    run_target,
 )
 from config_store import (
     load_config,
+    normalize_ssh_profile_payload,
 )
 from environment_registry import (
     delete_environment,
@@ -82,6 +85,7 @@ CRON_FILE_PATH = "/etc/cron.d/iam-monitoring"
 GITHUB_OWNER = os.environ.get("IAM_MONITORING_GITHUB_OWNER", "my-oracle-user")
 GITHUB_REPO = os.environ.get("IAM_MONITORING_GITHUB_REPO", "iam-monitoring")
 GITHUB_BRANCH = os.environ.get("IAM_MONITORING_GITHUB_BRANCH", "main")
+UPLOADED_KEY_ROOT = os.path.join(os.path.dirname(DB_PATH), "uploaded_keys")
 
 
 def read_version():
@@ -538,6 +542,79 @@ def parse_json_body(request_handler):
     return json.loads(raw_body.decode("utf-8"))
 
 
+def sanitize_uploaded_key_name(file_name):
+    name = os.path.basename(str(file_name or "").strip())
+    name = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip(".-")
+    return name or "private-key.pem"
+
+
+def save_uploaded_private_key(db_path, payload):
+    payload = payload or {}
+    file_name = sanitize_uploaded_key_name(payload.get("fileName") or payload.get("name"))
+    content = payload.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("Private key file content is required.")
+
+    encoded = content.encode("utf-8")
+    if len(encoded) > 1024 * 1024:
+        raise ValueError("Private key upload is too large.")
+
+    os.makedirs(UPLOADED_KEY_ROOT, exist_ok=True)
+    try:
+        os.chmod(UPLOADED_KEY_ROOT, 0o700)
+    except Exception:
+        pass
+
+    timestamp = time.strftime("%Y%m%d%H%M%S", time.localtime())
+    stored_name = "{0}-{1}-{2}".format(timestamp, uuid.uuid4().hex[:8], file_name)
+    full_path = os.path.join(UPLOADED_KEY_ROOT, stored_name)
+    normalized_content = content.replace("\r\n", "\n")
+    with open(full_path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(normalized_content)
+    try:
+        os.chmod(full_path, 0o600)
+    except Exception:
+        pass
+
+    return {
+        "path": full_path,
+        "fileName": file_name,
+        "storedName": stored_name,
+        "size": len(encoded),
+    }
+
+
+def test_ssh_target(payload):
+    payload = payload or {}
+    profile = normalize_ssh_profile_payload(payload, default_username="")
+    if not str(profile.get("host") or "").strip():
+        raise ValueError("SSH host is required.")
+    if not str(profile.get("username") or "").strip():
+        raise ValueError("SSH username is required.")
+    if profile.get("authType") == "password" and not str(profile.get("password") or "").strip():
+        raise ValueError("SSH password is required for this test.")
+    if profile.get("authType") == "private_key" and not str(profile.get("privateKeyPath") or "").strip():
+        raise ValueError("Private key path is required for this test.")
+
+    result = run_target(profile, "hostname; printf '\\n'; id -un")
+    if result.get("exit_code") != 0:
+        raise ValueError(result.get("output") or "SSH test failed.")
+
+    output_lines = [line.strip() for line in str(result.get("output") or "").splitlines() if line.strip()]
+    hostname = output_lines[0] if output_lines else ""
+    login_user = output_lines[1] if len(output_lines) > 1 else profile.get("username") or ""
+    return {
+        "ok": True,
+        "host": profile.get("host") or "",
+        "port": profile.get("port") or 22,
+        "sshMode": profile.get("sshMode") or "root_password",
+        "sudoRequired": bool(profile.get("sudoRequired")),
+        "hostname": hostname,
+        "loginUser": login_user,
+        "message": "SSH test succeeded for {0}@{1}.".format(profile.get("username") or "", profile.get("host") or ""),
+    }
+
+
 def send_notification_test(db_path, payload):
     payload = payload or {}
     settings = get_notification_settings(db_path, include_secret=True)
@@ -633,6 +710,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         path = parsed.path or "/"
+
+        if path == "/api/admin/ssh-keys/upload":
+            return self.handle_upload_private_key()
+
+        if path == "/api/admin/ssh-test":
+            return self.handle_test_ssh()
 
         if path == "/api/admin/environments":
             return self.handle_create_environment()
@@ -984,6 +1067,22 @@ class Handler(BaseHTTPRequestHandler):
         try:
             payload = parse_json_body(self)
             result = send_notification_test(DB_PATH, payload)
+            self.send_json(200, result)
+        except Exception as exc:
+            self.send_json(400, {"error": str(exc)})
+
+    def handle_upload_private_key(self):
+        try:
+            payload = parse_json_body(self)
+            result = save_uploaded_private_key(DB_PATH, payload)
+            self.send_json(200, result)
+        except Exception as exc:
+            self.send_json(400, {"error": str(exc)})
+
+    def handle_test_ssh(self):
+        try:
+            payload = parse_json_body(self)
+            result = test_ssh_target(payload)
             self.send_json(200, result)
         except Exception as exc:
             self.send_json(400, {"error": str(exc)})

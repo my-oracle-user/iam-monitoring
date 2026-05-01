@@ -581,7 +581,7 @@ def build_environment_target(environment):
             "host": server.get("host") or "",
             "port": server.get("port") or 22,
             "username": username,
-            "sshMode": "root_key" if username == "root" and not sudo_required else "user_key_sudo",
+            "sshMode": "root_key" if username == "root" and not sudo_required else ("user_key_sudo" if sudo_required else "user_key"),
             "authType": "private_key",
             "sudoRequired": sudo_required,
             "password": "",

@@ -121,7 +121,7 @@ def normalize_environment_type(value, fallback=""):
 
 def normalize_ssh_mode(value, fallback="root_password"):
     text = str(value or "").strip().lower()
-    if text in ("root_password", "user_password_sudo", "root_key", "user_key_sudo"):
+    if text in ("root_password", "user_password", "user_password_sudo", "root_key", "user_key", "user_key_sudo"):
         return text
     return fallback
 
@@ -178,7 +178,7 @@ def repair_bootstrap_server_profile(environment):
 
     # Older builds overwrote the saved SSH profile with the runtime key profile.
     # Repair the user-facing server settings so the UI still reflects the original bootstrap login.
-    if current_mode in ("root_key", "user_key_sudo") or (runtime_key_path and current_key_path == runtime_key_path):
+    if current_mode in ("root_key", "user_key", "user_key_sudo") or (runtime_key_path and current_key_path == runtime_key_path):
         server["sshMode"] = initial_mode
         server["authType"] = "private_key" if "_key" in initial_mode else "password"
         if server["authType"] == "password":
@@ -626,7 +626,7 @@ def normalize_environment(payload, existing=None):
         environment["server"]["username"] = "root"
         environment["server"]["sudoRequired"] = False
     else:
-        environment["server"]["sudoRequired"] = True
+        environment["server"]["sudoRequired"] = ssh_mode.endswith("_sudo")
 
     if not environment["oam"]["checks"] and products.get("oam"):
         environment["oam"]["checks"] = deep_copy(DEFAULT_OAM_CHECKS)
