@@ -1,0 +1,68 @@
+{
+  "dashboardTitle": "Identity And Access Management Dashboard",
+  "notes": [
+    "Starter configuration for OIG, OAM, and OUD monitoring.",
+    "Keep real credentials in targets.local.json so they do not get committed accidentally."
+  ],
+  "targets": [
+    {
+      "name": "OAM / OUD",
+      "role": "Identity Stack",
+      "host": "celvpvm04314.us.oracle.com",
+      "username": "root",
+      "password": "CHANGE_ME",
+      "hostKeys": [
+        "SHA256:NnMR2DFWW+nLs+BnklRZShBUQ+ad+lbkXHYk3vkESQ4",
+        "SHA256:TsyqCDIMfK2OUw33oP7vr9fv0zUsehRm9SN5fkbe3VA",
+        "SHA256:3anzFpXFYxNX4tgjULbbYEJlTmJoRRRGKJq4BqAPFmc"
+      ],
+      "scriptDirectory": "/refresh/home/auto/bin",
+      "appChecks": [
+        {
+          "name": "OAM Console",
+          "url": "http://localhost:7001/oamconsole"
+        },
+        {
+          "name": "OUDSM",
+          "url": "http://localhost:7101/oudsm"
+        },
+        {
+          "name": "OAM Access",
+          "url": "http://localhost:14150/access"
+        },
+        {
+          "name": "Fusion Middleware EM",
+          "url": "http://localhost:7201/em"
+        }
+      ],
+      "processMatchers": [
+        "AdminServer",
+        "oud",
+        "ohs",
+        "oam"
+      ]
+    },
+    {
+      "name": "Monitoring / OIG",
+      "role": "Monitoring Server",
+      "host": "celvpvm04383.us.oracle.com",
+      "username": "root",
+      "password": "CHANGE_ME",
+      "hostKeys": [
+        "SHA256:NnMR2DFWW+nLs+BnklRZShBUQ+ad+lbkXHYk3vkESQ4",
+        "SHA256:TsyqCDIMfK2OUw33oP7vr9fv0zUsehRm9SN5fkbe3VA",
+        "SHA256:3anzFpXFYxNX4tgjULbbYEJlTmJoRRRGKJq4BqAPFmc"
+      ],
+      "scriptDirectory": "/refresh/home/auto/bin",
+      "appChecks": [],
+      "processMatchers": [
+        "java",
+        "oig",
+        "grafana",
+        "prometheus",
+        "node_exporter"
+      ]
+    }
+  ]
+}
+

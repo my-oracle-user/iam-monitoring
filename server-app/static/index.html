@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Oracle Identity &amp; Access Management Dashboard</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+    <div class="app-shell">
+        <header class="topbar">
+            <div class="topbar-brand">
+                <div class="oracle-mark" aria-hidden="true"></div>
+                <div class="topbar-brand-copy">
+                    <p class="topbar-kicker">Oracle Cloud Infrastructure</p>
+                    <h1 class="topbar-title">Oracle Identity &amp; Access Management Dashboard</h1>
+                </div>
+            </div>
+
+            <div class="topbar-context">
+                <label for="context-switcher">Context</label>
+                <select id="context-switcher"></select>
+                <img class="topbar-avatar" src="/assets/oci/user-icon.png" alt="">
+            </div>
+        </header>
+
+        <div class="workspace-shell">
+            <aside class="workspace-sidebar">
+                <nav id="sidebar-nav" class="sidebar-nav" aria-label="Primary"></nav>
+            </aside>
+
+            <main class="workspace-main">
+                <section class="page-hero">
+                    <div class="page-hero-strip" aria-hidden="true"></div>
+                    <div class="page-hero-body">
+                        <div class="page-hero-copy">
+                            <p id="page-breadcrumb" class="page-breadcrumb">Loading</p>
+                            <h2 id="page-title" class="page-title">Loading Console</h2>
+                            <p id="page-copy" class="page-copy">Preparing the dashboard.</p>
+                        </div>
+
+                        <div class="page-hero-meta">
+                            <div id="page-status"></div>
+                            <p id="page-generated-at" class="page-generated-at">Loading</p>
+                        </div>
+                    </div>
+
+                    <div id="page-badges" class="page-badges"></div>
+                </section>
+
+                <section id="message-banner" class="message-banner hidden"></section>
+                <section id="page-content" class="page-content"></section>
+            </main>
+        </div>
+    </div>
+
+    <div id="environment-modal-backdrop" class="modal-backdrop hidden">
+        <section class="modal-shell" role="dialog" aria-modal="true" aria-labelledby="environment-modal-title">
+            <header class="modal-header">
+                <div>
+                    <p id="environment-modal-crumb" class="modal-breadcrumb">Administration / Environments</p>
+                    <h3 id="environment-modal-title" class="modal-title">Create Environment</h3>
+                    <p class="modal-copy">Save connection details for this environment.</p>
+                </div>
+
+                <button id="environment-modal-close" class="button is-quiet" type="button" aria-label="Close">Close</button>
+            </header>
+
+            <div id="environment-modal-body" class="modal-body"></div>
+        </section>
+    </div>
+
+    <script src="/assets/app.js"></script>
+</body>
+</html>
