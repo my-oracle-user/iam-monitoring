@@ -110,7 +110,7 @@ def _job_log_path(db_path, environment_id):
     return os.path.join(_log_dir(db_path), "collector-{0}.log".format(environment_id))
 
 
-def _job_tail(path, max_lines=18):
+def _job_tail(path, max_lines=40):
     if not os.path.isfile(path):
         return ""
     try:
@@ -146,6 +146,15 @@ def _write_state_file(path, payload):
         for key, value in payload.items():
             handle.write("{0}={1}\n".format(key, "" if value is None else str(value)))
     os.replace(temp_path, path)
+
+
+def _emit_progress(progress, message):
+    if not callable(progress):
+        return
+    try:
+        progress(str(message))
+    except Exception:
+        return
 
 
 def _pid_is_running(pid):
@@ -426,15 +435,21 @@ def bootstrap_environment_runtime(db_path, environment_id):
     return get_environment(db_path, environment_id, include_secret=True)
 
 
-def _decorate_dashboard(environment, dashboard_payload, trigger, runtime_env_path, duration_ms=None):
+def _decorate_dashboard(environment, dashboard_payload, trigger, runtime_env_path, duration_ms=None, snapshot_path=None, db_path=None):
     dashboard_payload = dashboard_payload or {}
     dashboard_payload["generatedAtEpoch"] = int(time.time())
     dashboard_payload["environment"] = dashboard_payload.get("environment") or {}
     dashboard_payload["environment"]["collection"] = environment.get("collection") or {}
     dashboard_payload["environment"]["bootstrap"] = environment.get("bootstrap") or {}
+    updated_files = [path for path in (runtime_env_path, snapshot_path) if path]
+    products = environment.get("products") or {}
     dashboard_payload["runtime"] = {
         "trigger": trigger,
         "runtimeEnvPath": runtime_env_path,
+        "snapshotPath": snapshot_path,
+        "databasePath": db_path,
+        "updatedFiles": updated_files,
+        "productsCollected": [key for key, enabled in products.items() if enabled],
         "durationMs": duration_ms,
     }
     notes = list(dashboard_payload.get("notes") or [])
@@ -449,26 +464,77 @@ def _decorate_dashboard(environment, dashboard_payload, trigger, runtime_env_pat
     return dashboard_payload
 
 
-def collect_environment_now(db_path, environment_id, trigger="manual"):
+def collect_environment_now(db_path, environment_id, trigger="manual", progress=None):
     environment = get_environment(db_path, environment_id, include_secret=True)
     if not environment:
         raise KeyError("Environment not found.")
     bootstrap = environment.get("bootstrap") or {}
     if trigger in ("manual", "scheduler", "bootstrap") and str(bootstrap.get("status") or "").lower() != "ready":
         raise ValueError("Run bootstrap first. This environment has not switched to its runtime SSH key yet.")
+    products = [key.upper() for key, enabled in (environment.get("products") or {}).items() if enabled]
+    _emit_progress(progress, "Loaded environment profile from registry: {0}".format(db_path))
+    _emit_progress(
+        progress,
+        "Environment type {0}; products enabled: {1}.".format(
+            str(environment.get("environmentType") or "not-set").upper() or "NOT-SET",
+            ", ".join(products) or "None",
+        ),
+    )
     runtime_env_path = write_runtime_env_file(db_path, environment)
+    _emit_progress(progress, "Updated runtime environment file: {0}".format(runtime_env_path))
+    server = environment.get("server") or {}
+    _emit_progress(
+        progress,
+        "Collecting host metrics from {0}:{1} as {2} using {3}.".format(
+            server.get("host") or "-",
+            server.get("port") or 22,
+            server.get("username") or "root",
+            server.get("sshMode") or "root_password",
+        ),
+    )
+    if (environment.get("products") or {}).get("oud"):
+        oud = environment.get("oud") or {}
+        _emit_progress(
+            progress,
+            "Collecting OUD runtime from host {0}; status path {1}; LDAP port {2}; admin port {3}.".format(
+                oud.get("host") or server.get("host") or "-",
+                oud.get("statusPath") or "-",
+                oud.get("ldapPort") or 1389,
+                oud.get("adminPort") or 4444,
+            ),
+        )
+    if (environment.get("products") or {}).get("weblogic"):
+        weblogic = environment.get("weblogic") or {}
+        admin_host = (weblogic.get("adminHost") or {}).get("host") or server.get("host") or "-"
+        _emit_progress(
+            progress,
+            "Collecting WebLogic runtime from admin host {0}; admin URL {1}; JSTAT path {2}.".format(
+                admin_host,
+                weblogic.get("adminUrl") or "-",
+                weblogic.get("jstatPath") or "-",
+            ),
+        )
     started = time.time()
     try:
         dashboard = collect_environment_dashboard(environment)
         duration_ms = int((time.time() - started) * 1000)
-        dashboard = _decorate_dashboard(environment, dashboard, trigger, runtime_env_path, duration_ms)
+        snapshot_path = _snapshot_path(db_path, environment_id)
+        dashboard = _decorate_dashboard(environment, dashboard, trigger, runtime_env_path, duration_ms, snapshot_path, db_path)
         save_environment_snapshot(db_path, environment_id, dashboard)
+        _emit_progress(progress, "Updated dashboard snapshot file: {0}".format(snapshot_path))
+        _emit_progress(
+            progress,
+            "Run updated files: {0}.".format(", ".join([runtime_env_path, snapshot_path])),
+        )
+        _emit_progress(progress, "Collection duration: {0} ms.".format(duration_ms))
         return dashboard
     except Exception as exc:
         dashboard = build_environment_error_dashboard(environment, str(exc))
         duration_ms = int((time.time() - started) * 1000)
-        dashboard = _decorate_dashboard(environment, dashboard, trigger, runtime_env_path, duration_ms)
+        snapshot_path = _snapshot_path(db_path, environment_id)
+        dashboard = _decorate_dashboard(environment, dashboard, trigger, runtime_env_path, duration_ms, snapshot_path, db_path)
         save_environment_snapshot(db_path, environment_id, dashboard)
+        _emit_progress(progress, "Updated dashboard snapshot file after error: {0}".format(snapshot_path))
         raise
 
 

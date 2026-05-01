@@ -50,6 +50,13 @@ def _log_line(db_path, environment_id, message):
     )
 
 
+def _progress_logger(db_path, environment_id):
+    def _log(message):
+        print(_log_line(db_path, environment_id, message))
+
+    return _log
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run IAM environment collection jobs.")
     parser.add_argument("--db-path", required=True, help="SQLite registry path")
@@ -74,7 +81,12 @@ def main():
     print(_log_line(args.db_path, args.env_id, "Starting environment collector."))
     exit_code = 0
     try:
-        dashboard = collect_environment_now(args.db_path, args.env_id, trigger=args.trigger)
+        dashboard = collect_environment_now(
+            args.db_path,
+            args.env_id,
+            trigger=args.trigger,
+            progress=_progress_logger(args.db_path, args.env_id),
+        )
         print(
             _log_line(
                 args.db_path,
