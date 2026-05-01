@@ -882,7 +882,9 @@ tbody tr:last-child td {
     line-height: 1.55;
     white-space: pre-wrap;
     word-break: break-word;
-    min-height: 160px;
+    min-height: 0;
+    max-height: 260px;
+    overflow: auto;
     background:
         linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(0, 0, 0, 0.06)),
         #161513;

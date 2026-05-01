@@ -110,7 +110,7 @@ def _job_log_path(db_path, environment_id):
     return os.path.join(_log_dir(db_path), "collector-{0}.log".format(environment_id))
 
 
-def _job_tail(path, max_lines=40):
+def _job_tail(path, max_lines=10):
     if not os.path.isfile(path):
         return ""
     try:
@@ -119,6 +119,28 @@ def _job_tail(path, max_lines=40):
         return "".join(lines[-max_lines:]).strip()
     except Exception:
         return ""
+
+
+def _local_log_timestamp():
+    return time.strftime("%Y-%m-%d %I:%M:%S %p %Z", time.localtime())
+
+
+def _environment_label(environment):
+    environment = environment or {}
+    name = str(environment.get("name") or "").strip()
+    environment_id = str(environment.get("id") or "").strip()
+    if name and environment_id:
+        return "{0} ({1})".format(name, environment_id)
+    return name or environment_id or "Environment"
+
+
+def _append_job_log_line(path, environment, message):
+    directory = os.path.dirname(path)
+    if directory:
+        _ensure_dir(directory)
+    line = "[{0}] [{1}] {2}\n".format(_local_log_timestamp(), _environment_label(environment), str(message))
+    with open(path, "a", encoding="utf-8", newline="\n") as handle:
+        handle.write(line)
 
 
 def _read_state_file(path):
@@ -574,6 +596,11 @@ def launch_collection_job(db_path, environment_id, trigger="manual"):
     started_at = _now_utc_iso()
     state_path = _job_state_path(db_path, environment_id)
     log_path = _job_log_path(db_path, environment_id)
+    trigger_label = {
+        "manual": "Run Jobs Now requested from the dashboard. Starting background collector.",
+        "bootstrap": "Bootstrap started the collector. Starting background collector.",
+        "scheduler": "Scheduled collector window reached. Starting background collector.",
+    }.get(str(trigger or "").strip().lower(), "Starting background collector.")
     _write_state_file(
         state_path,
         {
@@ -585,6 +612,7 @@ def launch_collection_job(db_path, environment_id, trigger="manual"):
             "trigger": trigger,
         },
     )
+    _append_job_log_line(log_path, environment, trigger_label)
 
     script_path = os.path.join(APP_ROOT, "collect_environment.py")
     wrapper = (
