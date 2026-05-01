@@ -11,7 +11,7 @@ from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 from urllib.parse import parse_qs, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener, urlopen
 
 from collector import (
     build_environment_error_dashboard,
@@ -148,6 +148,7 @@ def build_help_details():
             "Administration is where environments, notifications, and support details live. Environment pages stay focused on that selected IAM environment.",
             "Use Save And Bootstrap when adding an environment so the dashboard can switch from the initial SSH login to its installed runtime key for ongoing collection.",
             "Fresh installs start with an empty SQLite environment registry and pick up runtime settings from the local environment file.",
+            "If the Check For Updates action needs an outbound proxy, set IAM_MONITORING_HTTP_PROXY and IAM_MONITORING_HTTPS_PROXY in /etc/iam-monitoring.env, then restart the service.",
         ],
     }
 
@@ -201,8 +202,48 @@ def compare_version_values(local_version, remote_version):
     return 0
 
 
+def update_check_proxy_settings():
+    return {
+        "http": str(
+            os.environ.get(
+                "IAM_MONITORING_HTTP_PROXY",
+                os.environ.get("http_proxy", os.environ.get("HTTP_PROXY", "")),
+            )
+            or ""
+        ).strip(),
+        "https": str(
+            os.environ.get(
+                "IAM_MONITORING_HTTPS_PROXY",
+                os.environ.get("https_proxy", os.environ.get("HTTPS_PROXY", "")),
+            )
+            or ""
+        ).strip(),
+        "no_proxy": str(
+            os.environ.get(
+                "IAM_MONITORING_NO_PROXY",
+                os.environ.get("no_proxy", os.environ.get("NO_PROXY", "")),
+            )
+            or ""
+        ).strip(),
+    }
+
+
+def update_check_proxy_hint(proxy_settings=None):
+    proxy_settings = proxy_settings or update_check_proxy_settings()
+    if proxy_settings.get("http") or proxy_settings.get("https"):
+        return (
+            "Proxy is already configured for the service. Recheck the proxy host, port, "
+            "and any required SSL or egress policy."
+        )
+    return (
+        "If this host requires an outbound proxy, set IAM_MONITORING_HTTP_PROXY and "
+        "IAM_MONITORING_HTTPS_PROXY in /etc/iam-monitoring.env, then restart iam-monitoring."
+    )
+
+
 def build_update_check_payload():
     current_version = read_version()
+    proxy_settings = update_check_proxy_settings()
     payload = {
         "currentVersion": current_version,
         "remoteVersion": "",
@@ -212,10 +253,17 @@ def build_update_check_payload():
         "checkedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "status": "idle",
         "message": "",
+        "proxyConfigured": bool(proxy_settings.get("http") or proxy_settings.get("https")),
     }
     try:
         request = Request(payload["versionUrl"], headers={"User-Agent": "iam-monitoring-update-check"})
-        with urlopen(request, timeout=6) as response:
+        proxy_handler_settings = {scheme: value for scheme, value in proxy_settings.items() if scheme in ("http", "https") and value}
+        if proxy_handler_settings:
+            opener = build_opener(ProxyHandler(proxy_handler_settings))
+            response_handle = opener.open(request, timeout=6)
+        else:
+            response_handle = urlopen(request, timeout=6)
+        with response_handle as response:
             remote_version = response.read().decode("utf-8").strip()
         if not remote_version:
             raise ValueError("GitHub did not return a VERSION value.")
@@ -239,7 +287,7 @@ def build_update_check_payload():
             )
     except Exception as exc:
         payload["status"] = "error"
-        payload["message"] = "GitHub update check failed: {0}".format(str(exc))
+        payload["message"] = "GitHub update check failed: {0} {1}".format(str(exc), update_check_proxy_hint(proxy_settings))
     return payload
 
 

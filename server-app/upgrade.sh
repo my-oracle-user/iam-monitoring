@@ -288,6 +288,10 @@ IAM_MONITORING_DB_PATH=${STATE_DIR}/iam-monitoring.sqlite
 IAM_MONITORING_LOG_DIR=${LOG_DIR}
 IAM_MONITORING_DEFAULT_COLLECTION_MINUTES=60
 IAM_MONITORING_SCHEDULER_MINUTES=5
+# Optional outbound proxy for GitHub update checks
+# IAM_MONITORING_HTTP_PROXY=http://proxy.example.com:80
+# IAM_MONITORING_HTTPS_PROXY=http://proxy.example.com:80
+# IAM_MONITORING_NO_PROXY=127.0.0.1,localhost
 EOF
   chmod 640 "${CONFIG_FILE}"
   chown root:"${SERVICE_USER}" "${CONFIG_FILE}" || true
@@ -360,3 +364,8 @@ echo "  curl -I http://127.0.0.1:${HEALTH_PORT}/healthz"
 echo "  curl http://127.0.0.1:${HEALTH_PORT}/healthz"
 echo "  sudo journalctl -u ${SERVICE_NAME} -n 100 --no-pager"
 echo "  sudo tail -F ${LOG_DIR}/scheduler.log"
+echo
+echo "If GitHub update checks need a proxy, add these to ${CONFIG_FILE} and restart ${SERVICE_NAME}:"
+echo "  IAM_MONITORING_HTTP_PROXY=http://proxy.example.com:80"
+echo "  IAM_MONITORING_HTTPS_PROXY=http://proxy.example.com:80"
+echo "  IAM_MONITORING_NO_PROXY=127.0.0.1,localhost"

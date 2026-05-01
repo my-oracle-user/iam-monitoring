@@ -18,6 +18,15 @@ sudo bash ./install.sh
 The installer prompts for the service port and defaults to `8081`.
 It also prompts for the default collector interval and defaults to `60` minutes.
 
+If the server needs an outbound proxy for GitHub update checks, add these to `/etc/iam-monitoring.env`
+after install and then restart `iam-monitoring`:
+
+```bash
+IAM_MONITORING_HTTP_PROXY=http://www-proxy-phx.oraclecorp.com:80
+IAM_MONITORING_HTTPS_PROXY=http://www-proxy-phx.oraclecorp.com:80
+IAM_MONITORING_NO_PROXY=127.0.0.1,localhost
+```
+
 ## Quick Upgrade
 
 From the Linux host, run the installed upgrader against the latest GitHub source bundle:
@@ -27,6 +36,20 @@ sudo bash -lc 'curl -L https://github.com/my-oracle-user/iam-monitoring/archive/
 ```
 
 That keeps the existing runtime env file, state directory, and saved environments in place.
+
+If you only need the upgrade download itself to use a proxy, your current pattern also works:
+
+```bash
+sudo bash -lc '
+export http_proxy=http://www-proxy-phx.oraclecorp.com:80
+export https_proxy=http://www-proxy-phx.oraclecorp.com:80
+curl -L https://github.com/my-oracle-user/iam-monitoring/archive/refs/heads/main.tar.gz -o /tmp/iam-monitoring-main.tar.gz && \
+bash /opt/iam-monitoring/upgrade.sh --archive /tmp/iam-monitoring-main.tar.gz
+'
+```
+
+For the dashboard service's own `Check For Updates` button, put the proxy settings in `/etc/iam-monitoring.env`
+and restart the service.
 
 ## What is here
 
@@ -78,6 +101,18 @@ Fresh installs start with an empty environment registry.
 Runtime service settings come from `/etc/iam-monitoring.env`.
 Saved IAM environments are stored in the SQLite registry under `/var/lib/iam-monitoring/state`.
 The host scheduler wakes every 5 minutes and only runs an environment when that environment's saved interval is due.
+
+Optional proxy settings for the dashboard service:
+
+- `IAM_MONITORING_HTTP_PROXY=http://proxy.example.com:80`
+- `IAM_MONITORING_HTTPS_PROXY=http://proxy.example.com:80`
+- `IAM_MONITORING_NO_PROXY=127.0.0.1,localhost`
+
+After changing `/etc/iam-monitoring.env`, restart the service:
+
+```bash
+sudo systemctl restart iam-monitoring
+```
 
 Post-install checks:
 
