@@ -3,6 +3,31 @@
 This directory contains the hosted IAM dashboard server, its administration API, and
 the install and upgrade utilities used to deploy it as a Linux systemd service.
 
+## Quick Install
+
+From the Linux host, download the current GitHub source bundle, extract it, and run the installer:
+
+```bash
+cd /tmp
+curl -L https://github.com/my-oracle-user/iam-monitoring/archive/refs/heads/main.tar.gz -o iam-monitoring-main.tar.gz
+tar -xzf iam-monitoring-main.tar.gz
+cd iam-monitoring-main/server-app
+sudo bash ./install.sh
+```
+
+The installer prompts for the service port and defaults to `8081`.
+It also prompts for the default collector interval and defaults to `60` minutes.
+
+## Quick Upgrade
+
+From the Linux host, run the installed upgrader against the latest GitHub source bundle:
+
+```bash
+sudo bash -lc 'curl -L https://github.com/my-oracle-user/iam-monitoring/archive/refs/heads/main.tar.gz -o /tmp/iam-monitoring-main.tar.gz && bash /opt/iam-monitoring/upgrade.sh --archive /tmp/iam-monitoring-main.tar.gz'
+```
+
+That keeps the existing runtime env file, state directory, and saved environments in place.
+
 ## What is here
 
 - `app.py`: HTTP server and environment administration API
