@@ -4,6 +4,7 @@ set -euo pipefail
 PRODUCT_NAME="Oracle Identity & Access Management Dashboard"
 PRODUCT_SLUG="iam-monitoring"
 SERVICE_NAME="iam-monitoring"
+UPGRADE_SERVICE_NAME="iam-monitoring-upgrader"
 INSTALL_DIR="/opt/iam-monitoring"
 CONFIG_FILE="/etc/iam-monitoring.env"
 STATE_DIR="/var/lib/iam-monitoring/state"
@@ -185,6 +186,10 @@ service_template_path() {
   printf '%s' "${INSTALL_DIR}/deploy/oracledash.service"
 }
 
+upgrade_service_template_path() {
+  printf '%s' "${INSTALL_DIR}/deploy/iam-monitoring-upgrader.service"
+}
+
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run this upgrade as root, for example: sudo bash ./upgrade.sh" >&2
   exit 1
@@ -234,6 +239,9 @@ fi
 if [[ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]]; then
   cp -a "/etc/systemd/system/${SERVICE_NAME}.service" "${BACKUP_DIR}/service/"
 fi
+if [[ -f "/etc/systemd/system/${UPGRADE_SERVICE_NAME}.service" ]]; then
+  cp -a "/etc/systemd/system/${UPGRADE_SERVICE_NAME}.service" "${BACKUP_DIR}/service/"
+fi
 
 cat > "${BACKUP_DIR}/restore.sh" <<EOF
 #!/usr/bin/env bash
@@ -252,9 +260,13 @@ fi
 if [[ -f "${BACKUP_DIR}/service/${SERVICE_NAME}.service" ]]; then
   cp -a "${BACKUP_DIR}/service/${SERVICE_NAME}.service" "/etc/systemd/system/${SERVICE_NAME}.service"
 fi
+if [[ -f "${BACKUP_DIR}/service/${UPGRADE_SERVICE_NAME}.service" ]]; then
+  cp -a "${BACKUP_DIR}/service/${UPGRADE_SERVICE_NAME}.service" "/etc/systemd/system/${UPGRADE_SERVICE_NAME}.service"
+fi
 systemctl daemon-reload
 systemctl restart "${SERVICE_NAME}"
 systemctl is-active "${SERVICE_NAME}"
+systemctl start "${UPGRADE_SERVICE_NAME}" >/dev/null 2>&1 || true
 EOF
 chmod +x "${BACKUP_DIR}/restore.sh"
 
@@ -269,6 +281,7 @@ chmod +x \
   "${INSTALL_DIR}/install.sh" \
   "${INSTALL_DIR}/install_oracledash.sh" \
   "${INSTALL_DIR}/scheduler_jobs.sh" \
+  "${INSTALL_DIR}/upgrade_watcher.py" \
   "${INSTALL_DIR}/upgrade.sh"
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}" "${STATE_DIR}" "${LOG_DIR}" || true
 
@@ -315,6 +328,14 @@ sed \
   -e "s|__INSTALL_DIR__|${INSTALL_DIR}|g" \
   -e "s|__CONFIG_FILE__|${CONFIG_FILE}|g" \
   "${SERVICE_TEMPLATE}" > "${SERVICE_FILE}"
+
+UPGRADE_SERVICE_FILE="/etc/systemd/system/${UPGRADE_SERVICE_NAME}.service"
+UPGRADE_SERVICE_TEMPLATE="$(upgrade_service_template_path)"
+sed \
+  -e "s|__PRODUCT_NAME__|${PRODUCT_NAME}|g" \
+  -e "s|__INSTALL_DIR__|${INSTALL_DIR}|g" \
+  -e "s|__CONFIG_FILE__|${CONFIG_FILE}|g" \
+  "${UPGRADE_SERVICE_TEMPLATE}" > "${UPGRADE_SERVICE_FILE}"
 systemctl daemon-reload
 
 section "Installing updated collector scheduler"
@@ -341,7 +362,11 @@ section "Validating application modules"
   "${INSTALL_DIR}/collector.py" \
   "${INSTALL_DIR}/config_store.py" \
   "${INSTALL_DIR}/environment_registry.py" \
-  "${INSTALL_DIR}/job_runner.py"
+  "${INSTALL_DIR}/job_runner.py" \
+  "${INSTALL_DIR}/notification_store.py" \
+  "${INSTALL_DIR}/support_store.py" \
+  "${INSTALL_DIR}/upgrade_runtime.py" \
+  "${INSTALL_DIR}/upgrade_watcher.py"
 
 if [[ "${SKIP_RESTART}" -eq 0 ]]; then
   section "Restarting service"
@@ -352,14 +377,18 @@ else
   echo "Upgrade validation completed without restarting ${SERVICE_NAME}."
 fi
 systemctl enable --now "${CRON_SERVICE_NAME}" || true
+systemctl enable "${UPGRADE_SERVICE_NAME}" || true
+systemctl start "${UPGRADE_SERVICE_NAME}" || true
 
 section "Upgrade complete"
 echo "${PRODUCT_NAME} is ready."
 echo "Installed service: ${SERVICE_NAME}"
+echo "Installed upgrade helper: ${UPGRADE_SERVICE_NAME}"
 echo "Cron service: ${CRON_SERVICE_NAME}"
 echo "Health check: http://<server-ip>:${HEALTH_PORT}/healthz"
 echo "Useful checks:"
 echo "  sudo systemctl status ${SERVICE_NAME} --no-pager"
+echo "  sudo systemctl status ${UPGRADE_SERVICE_NAME} --no-pager"
 echo "  curl -I http://127.0.0.1:${HEALTH_PORT}/healthz"
 echo "  curl http://127.0.0.1:${HEALTH_PORT}/healthz"
 echo "  sudo journalctl -u ${SERVICE_NAME} -n 100 --no-pager"

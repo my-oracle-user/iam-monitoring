@@ -52,6 +52,10 @@ from support_store import (
     get_update_proxy_settings,
     save_update_proxy_settings,
 )
+from upgrade_runtime import (
+    queue_github_upgrade,
+    read_upgrade_status,
+)
 
 
 APP_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -70,6 +74,8 @@ LOG_DIR = os.environ.get("IAM_MONITORING_LOG_DIR", os.path.join(os.path.dirname(
 CONFIG_FILE_PATH = os.environ.get("IAM_MONITORING_CONFIG", "/etc/iam-monitoring.env")
 SERVICE_NAME = "iam-monitoring"
 SERVICE_FILE_PATH = "/etc/systemd/system/{0}.service".format(SERVICE_NAME)
+UPGRADE_SERVICE_NAME = "iam-monitoring-upgrader"
+UPGRADE_SERVICE_FILE_PATH = "/etc/systemd/system/{0}.service".format(UPGRADE_SERVICE_NAME)
 CRON_FILE_PATH = "/etc/cron.d/iam-monitoring"
 GITHUB_OWNER = os.environ.get("IAM_MONITORING_GITHUB_OWNER", "my-oracle-user")
 GITHUB_REPO = os.environ.get("IAM_MONITORING_GITHUB_REPO", "iam-monitoring")
@@ -109,6 +115,8 @@ def build_help_details():
         "platform": "Linux systemd service",
         "serviceName": SERVICE_NAME,
         "serviceFile": SERVICE_FILE_PATH,
+        "upgradeServiceName": UPGRADE_SERVICE_NAME,
+        "upgradeServiceFile": UPGRADE_SERVICE_FILE_PATH,
         "serviceUser": os.environ.get("IAM_MONITORING_SERVICE_USER", SERVICE_NAME),
         "installDirectory": APP_ROOT,
         "runtimeEnvFile": CONFIG_FILE_PATH,
@@ -127,10 +135,22 @@ def build_help_details():
         "schedulerWakeMinutes": scheduler_minutes,
         "defaultCollectionMinutes": default_collection_minutes,
         "updateProxy": update_proxy,
+        "githubUpgrade": {
+            "enabled": True,
+            "repoUrl": github_repo_url(),
+            "archiveUrl": github_archive_url(),
+            "branch": GITHUB_BRANCH,
+            "serviceName": UPGRADE_SERVICE_NAME,
+            "status": read_upgrade_status(DB_PATH),
+        },
         "checks": [
             {
                 "label": "Service status",
                 "command": "sudo systemctl status {0} --no-pager".format(SERVICE_NAME),
+            },
+            {
+                "label": "Upgrade helper status",
+                "command": "sudo systemctl status {0} --no-pager".format(UPGRADE_SERVICE_NAME),
             },
             {
                 "label": "Service logs",
@@ -155,12 +175,21 @@ def build_help_details():
             "Use Save And Bootstrap when adding an environment so the dashboard can switch from the initial SSH login to its installed runtime key for ongoing collection.",
             "Fresh installs start with an empty SQLite environment registry and pick up runtime settings from the local environment file.",
             "If GitHub update checks need an outbound proxy, save it under Administration / Help / GitHub Update Proxy. The Linux env file remains the service-level fallback.",
+            "GitHub upgrades can be queued from Administration / Help. The dashboard will disconnect briefly while the main service restarts on the new build.",
         ],
     }
 
 
 def github_repo_url():
     return "https://github.com/{0}/{1}".format(GITHUB_OWNER, GITHUB_REPO)
+
+
+def github_archive_url():
+    return "https://github.com/{0}/{1}/archive/refs/heads/{2}.tar.gz".format(
+        GITHUB_OWNER,
+        GITHUB_REPO,
+        GITHUB_BRANCH,
+    )
 
 
 def github_version_url():
@@ -569,6 +598,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/admin/updates/check":
             return self.handle_admin_update_check()
 
+        if path == "/api/admin/upgrade/status":
+            return self.handle_admin_upgrade_status()
+
         match = re.match(r"^/api/admin/environments/([^/]+)/jobs$", path)
         if match:
             return self.handle_environment_jobs(match.group(1))
@@ -605,6 +637,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/admin/notifications/test":
             return self.handle_notification_test()
+
+        if path == "/api/admin/upgrade/run":
+            return self.handle_run_github_upgrade()
 
         self.send_error(404, "Not found")
 
@@ -712,6 +747,54 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "settings": settings,
                     "proxy": merge_update_check_proxy_settings(saved_settings=settings),
+                },
+            )
+        except Exception as exc:
+            self.send_json(400, {"error": str(exc)})
+
+    def handle_admin_upgrade_status(self):
+        try:
+            self.send_json(
+                200,
+                {
+                    "enabled": True,
+                    "repoUrl": github_repo_url(),
+                    "archiveUrl": github_archive_url(),
+                    "branch": GITHUB_BRANCH,
+                    "serviceName": UPGRADE_SERVICE_NAME,
+                    "status": read_upgrade_status(DB_PATH),
+                },
+            )
+        except Exception as exc:
+            self.send_json(500, {"error": str(exc)})
+
+    def handle_run_github_upgrade(self):
+        try:
+            load_runtime_config()
+            update_proxy = merge_update_check_proxy_settings()
+            status = queue_github_upgrade(
+                DB_PATH,
+                {
+                    "requestedBy": "ui",
+                    "repoUrl": github_repo_url(),
+                    "archiveUrl": github_archive_url(),
+                    "branch": GITHUB_BRANCH,
+                    "currentVersion": read_version(),
+                    "targetVersion": "",
+                    "proxySettings": update_proxy.get("effectiveSettings") or {},
+                },
+            )
+            self.send_json(
+                202,
+                {
+                    "upgrade": {
+                        "enabled": True,
+                        "repoUrl": github_repo_url(),
+                        "archiveUrl": github_archive_url(),
+                        "branch": GITHUB_BRANCH,
+                        "serviceName": UPGRADE_SERVICE_NAME,
+                        "status": status,
+                    }
                 },
             )
         except Exception as exc:

@@ -4,6 +4,7 @@ set -euo pipefail
 PRODUCT_NAME="Oracle Identity & Access Management Dashboard"
 PRODUCT_SLUG="iam-monitoring"
 SERVICE_NAME="iam-monitoring"
+UPGRADE_SERVICE_NAME="iam-monitoring-upgrader"
 INSTALL_DIR="/opt/iam-monitoring"
 CONFIG_FILE="/etc/iam-monitoring.env"
 STATE_DIR="/var/lib/iam-monitoring/state"
@@ -226,6 +227,10 @@ service_template_path() {
   printf '%s' "${INSTALL_DIR}/deploy/oracledash.service"
 }
 
+upgrade_service_template_path() {
+  printf '%s' "${INSTALL_DIR}/deploy/iam-monitoring-upgrader.service"
+}
+
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run this installer as root, for example: sudo bash ./install_oracledash.sh" >&2
   exit 1
@@ -251,6 +256,7 @@ chmod +x \
   "${INSTALL_DIR}/install.sh" \
   "${INSTALL_DIR}/install_oracledash.sh" \
   "${INSTALL_DIR}/scheduler_jobs.sh" \
+  "${INSTALL_DIR}/upgrade_watcher.py" \
   "${INSTALL_DIR}/upgrade.sh"
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}" "${STATE_DIR}" "${LOG_DIR}"
 
@@ -285,6 +291,14 @@ sed \
   -e "s|__CONFIG_FILE__|${CONFIG_FILE}|g" \
   "${SERVICE_TEMPLATE}" > "${SERVICE_FILE}"
 
+UPGRADE_SERVICE_FILE="/etc/systemd/system/${UPGRADE_SERVICE_NAME}.service"
+UPGRADE_SERVICE_TEMPLATE="$(upgrade_service_template_path)"
+sed \
+  -e "s|__PRODUCT_NAME__|${PRODUCT_NAME}|g" \
+  -e "s|__INSTALL_DIR__|${INSTALL_DIR}|g" \
+  -e "s|__CONFIG_FILE__|${CONFIG_FILE}|g" \
+  "${UPGRADE_SERVICE_TEMPLATE}" > "${UPGRADE_SERVICE_FILE}"
+
 section "Installing collector scheduler"
 CRON_FILE="/etc/cron.d/${PRODUCT_SLUG}"
 CRON_TEMPLATE="${INSTALL_DIR}/deploy/crontab.iam-monitoring"
@@ -309,12 +323,19 @@ section "Validating application modules"
   "${INSTALL_DIR}/collector.py" \
   "${INSTALL_DIR}/config_store.py" \
   "${INSTALL_DIR}/environment_registry.py" \
-  "${INSTALL_DIR}/job_runner.py"
+  "${INSTALL_DIR}/job_runner.py" \
+  "${INSTALL_DIR}/notification_store.py" \
+  "${INSTALL_DIR}/support_store.py" \
+  "${INSTALL_DIR}/upgrade_runtime.py" \
+  "${INSTALL_DIR}/upgrade_watcher.py"
 
 systemctl daemon-reload
 systemctl enable "${SERVICE_NAME}"
 systemctl restart "${SERVICE_NAME}"
 systemctl is-active "${SERVICE_NAME}"
+systemctl enable "${UPGRADE_SERVICE_NAME}"
+systemctl restart "${UPGRADE_SERVICE_NAME}"
+systemctl is-active "${UPGRADE_SERVICE_NAME}"
 systemctl enable --now "${CRON_SERVICE_NAME}"
 
 section "Install complete"
@@ -327,11 +348,13 @@ echo "Use Save And Bootstrap when adding an environment so the dashboard can swi
 echo "from the initial SSH login to its installed runtime key for ongoing collection."
 echo
 echo "Installed service: ${SERVICE_NAME}"
+echo "Installed upgrade helper: ${UPGRADE_SERVICE_NAME}"
 echo "Cron service: ${CRON_SERVICE_NAME}"
 echo "Scheduler wake interval: every 5 minutes"
 echo "Default per-environment collector interval: ${COLLECTOR_MINUTES} minutes"
 echo "Useful checks:"
 echo "  sudo systemctl status ${SERVICE_NAME} --no-pager"
+echo "  sudo systemctl status ${UPGRADE_SERVICE_NAME} --no-pager"
 echo "  curl -I http://127.0.0.1:${DASHBOARD_PORT}/healthz"
 echo "  curl http://127.0.0.1:${DASHBOARD_PORT}/healthz"
 echo "  sudo journalctl -u ${SERVICE_NAME} -n 100 --no-pager"

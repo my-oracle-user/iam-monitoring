@@ -29,6 +29,7 @@ IAM_MONITORING_NO_PROXY=127.0.0.1,localhost
 
 You can also save update-check proxy details from `Administration -> Help -> GitHub Update Proxy`.
 Those UI-saved values take effect immediately for the dashboard's `Check For Updates` action.
+That same Help page can also queue a GitHub-based in-place upgrade.
 
 ## Quick Upgrade
 
@@ -56,6 +57,25 @@ and restart the service.
 
 Or save them from `Administration -> Help -> GitHub Update Proxy` if you want that GitHub check to work
 without editing the Linux env file directly.
+
+## UI GitHub Upgrade
+
+`Administration -> Help` can now queue a GitHub-based in-place upgrade.
+
+- It is enabled by default from the Help page in this build.
+- It downloads the configured GitHub branch as a bundle.
+- It runs the existing `upgrade.sh` path through a root-owned helper service.
+- The dashboard will be temporarily unavailable while `iam-monitoring` restarts.
+- The Help page shows queued/running/completed/failed status and the latest upgrade log tail.
+
+The helper service installed for this is:
+
+- `iam-monitoring-upgrader`
+
+Useful checks:
+
+- `sudo systemctl status iam-monitoring-upgrader --no-pager`
+- `sudo journalctl -u iam-monitoring-upgrader -n 100 --no-pager`
 
 ## What is here
 
