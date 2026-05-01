@@ -264,6 +264,7 @@ install_base_packages
 section "Creating service user and directories"
 id -u "${SERVICE_USER}" >/dev/null 2>&1 || useradd --system --create-home --shell /usr/sbin/nologin "${SERVICE_USER}"
 mkdir -p "${INSTALL_DIR}" "${STATE_DIR}" "${LOG_DIR}"
+mkdir -p "${STATE_DIR}/upgrade"
 
 section "Staging application bundle"
 copy_bundle_contents "${SOURCE_DIR}" "${INSTALL_DIR}"
@@ -275,6 +276,8 @@ chmod +x \
   "${INSTALL_DIR}/upgrade_watcher.py" \
   "${INSTALL_DIR}/upgrade.sh"
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}" "${STATE_DIR}" "${LOG_DIR}"
+chmod 775 "${STATE_DIR}" "${STATE_DIR}/upgrade" "${LOG_DIR}" || true
+find "${STATE_DIR}/upgrade" -maxdepth 1 -type f -exec chmod 664 {} \; 2>/dev/null || true
 
 section "Creating Python virtual environment"
 python3 -m venv "${INSTALL_DIR}/venv"
@@ -287,6 +290,7 @@ IAM_MONITORING_PORT=${DASHBOARD_PORT}
 IAM_MONITORING_CACHE_SECONDS=60
 IAM_MONITORING_DB_PATH=${STATE_DIR}/iam-monitoring.sqlite
 IAM_MONITORING_LOG_DIR=${LOG_DIR}
+IAM_MONITORING_SERVICE_USER=${SERVICE_USER}
 IAM_MONITORING_DEFAULT_COLLECTION_MINUTES=${COLLECTOR_MINUTES}
 IAM_MONITORING_SCHEDULER_MINUTES=5
 # Optional outbound proxy for GitHub update checks

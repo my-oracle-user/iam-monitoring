@@ -239,6 +239,7 @@ def default_environment(name=None, host=None):
             "adminUrl": "",
             "adminUsername": "weblogic",
             "adminPassword": "",
+            "oracleHome": "",
             "adminHost": {
                 "mode": "ssh",
                 "host": "",
@@ -251,8 +252,8 @@ def default_environment(name=None, host=None):
                 "privateKeyPath": "",
                 "passphrase": "",
             },
-            "jstatPath": "/refresh/home/jdk-21.0.5/bin/jstat",
-            "serverNames": ["AdminServer", "oam_server1"],
+            "jstatPath": "",
+            "serverNames": [],
         },
         "oam": {
             "checks": deep_copy(DEFAULT_OAM_CHECKS),
@@ -464,6 +465,12 @@ def normalize_environment(payload, existing=None):
                 existing_weblogic.get("adminPassword"),
                 allow_blank=coerce_bool(weblogic_payload.get("clearAdminPassword"), False),
             ),
+            "oracleHome": str(
+                weblogic_payload.get("oracleHome")
+                or existing_weblogic.get("oracleHome")
+                or base["weblogic"].get("oracleHome")
+                or ""
+            ).strip(),
             "adminHost": normalize_ssh_profile_payload(
                 weblogic_payload.get("adminHost"),
                 existing_weblogic.get("adminHost"),
@@ -834,6 +841,7 @@ def serialize_environment(environment, include_sensitive=False):
             "adminUsername": weblogic.get("adminUsername") or "",
             "adminPassword": "",
             "hasAdminPassword": bool(weblogic.get("adminPassword")),
+            "oracleHome": weblogic.get("oracleHome") or "",
             "adminHost": {
                 "mode": weblogic_admin_host.get("mode") or "ssh",
                 "host": weblogic_admin_host.get("host") or "",

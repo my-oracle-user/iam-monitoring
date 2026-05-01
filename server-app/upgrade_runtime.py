@@ -2,6 +2,10 @@ import json
 import os
 import time
 import uuid
+try:
+    import pwd
+except ImportError:
+    pwd = None
 
 
 BUSY_UPGRADE_STATUSES = {
@@ -11,6 +15,8 @@ BUSY_UPGRADE_STATUSES = {
     "applying",
 }
 
+DEFAULT_SERVICE_USER = os.environ.get("IAM_MONITORING_SERVICE_USER", "iam-monitoring")
+
 
 def _state_root(db_path):
     return os.path.dirname(os.path.abspath(db_path))
@@ -18,6 +24,41 @@ def _state_root(db_path):
 
 def _upgrade_dir(db_path):
     return os.path.join(_state_root(db_path), "upgrade")
+
+
+def _service_account_ids():
+    service_user = str(os.environ.get("IAM_MONITORING_SERVICE_USER") or DEFAULT_SERVICE_USER).strip() or DEFAULT_SERVICE_USER
+    if pwd is None:
+        return None, None
+    try:
+        record = pwd.getpwnam(service_user)
+    except Exception:
+        return None, None
+    return record.pw_uid, record.pw_gid
+
+
+def _apply_permissions(path, is_dir=False):
+    mode = 0o775 if is_dir else 0o664
+    try:
+        os.chmod(path, mode)
+    except Exception:
+        pass
+    uid, gid = _service_account_ids()
+    if uid is None or gid is None:
+        return
+    try:
+        os.chown(path, uid, gid)
+    except Exception:
+        pass
+
+
+def _repair_upgrade_layout(db_path):
+    upgrade_dir = _upgrade_dir(db_path)
+    if os.path.isdir(upgrade_dir):
+        _apply_permissions(upgrade_dir, is_dir=True)
+    for path in (upgrade_request_path(db_path), upgrade_status_path(db_path), upgrade_log_path(db_path)):
+        if os.path.exists(path):
+            _apply_permissions(path, is_dir=False)
 
 
 def upgrade_request_path(db_path):
@@ -35,10 +76,12 @@ def upgrade_log_path(db_path):
 def _ensure_dir(path):
     if not os.path.isdir(path):
         os.makedirs(path)
+    _apply_permissions(path, is_dir=True)
 
 
 def ensure_upgrade_layout(db_path):
     _ensure_dir(_upgrade_dir(db_path))
+    _repair_upgrade_layout(db_path)
 
 
 def _now_utc_iso():
@@ -68,6 +111,7 @@ def _write_json(path, payload):
         json.dump(payload, handle, indent=2, sort_keys=False)
         handle.write("\n")
     os.replace(temp_path, path)
+    _apply_permissions(path, is_dir=False)
 
 
 def _tail(path, max_lines=12):
@@ -125,6 +169,7 @@ def append_upgrade_log(db_path, message):
     line = "[{0}] {1}\n".format(_local_log_timestamp(), str(message))
     with open(path, "a", encoding="utf-8", newline="\n") as handle:
         handle.write(line)
+    _apply_permissions(path, is_dir=False)
     return path
 
 

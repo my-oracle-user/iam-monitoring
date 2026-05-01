@@ -763,6 +763,19 @@ class Handler(BaseHTTPRequestHandler):
                 },
             )
         except Exception as exc:
+            if isinstance(exc, PermissionError):
+                upgrade_state_dir = os.path.join(os.path.dirname(DB_PATH), "upgrade")
+                service_user = os.environ.get("IAM_MONITORING_SERVICE_USER", "iam-monitoring")
+                self.send_json(
+                    400,
+                    {
+                        "error": (
+                            "GitHub upgrade state is not writable by the dashboard service. "
+                            "Repair {0} ownership back to the {1} service user and retry."
+                        ).format(upgrade_state_dir, service_user)
+                    },
+                )
+                return
             self.send_json(400, {"error": str(exc)})
 
     def handle_admin_upgrade_status(self):

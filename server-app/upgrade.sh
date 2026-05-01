@@ -321,8 +321,10 @@ EOF
 chmod +x "${BACKUP_DIR}/restore.sh"
 
 section "Ensuring runtime directories"
-mkdir -p "${STATE_DIR}" "${LOG_DIR}"
+mkdir -p "${STATE_DIR}" "${STATE_DIR}/upgrade" "${LOG_DIR}"
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "${STATE_DIR}" "${LOG_DIR}" || true
+chmod 775 "${STATE_DIR}" "${STATE_DIR}/upgrade" "${LOG_DIR}" || true
+find "${STATE_DIR}/upgrade" -maxdepth 1 -type f -exec chmod 664 {} \; 2>/dev/null || true
 
 section "Staging updated application bundle"
 copy_bundle_contents "${SOURCE_DIR}" "${INSTALL_DIR}"
@@ -349,6 +351,7 @@ IAM_MONITORING_PORT=8081
 IAM_MONITORING_CACHE_SECONDS=60
 IAM_MONITORING_DB_PATH=${STATE_DIR}/iam-monitoring.sqlite
 IAM_MONITORING_LOG_DIR=${LOG_DIR}
+IAM_MONITORING_SERVICE_USER=${SERVICE_USER}
 IAM_MONITORING_DEFAULT_COLLECTION_MINUTES=60
 IAM_MONITORING_SCHEDULER_MINUTES=5
 # Optional outbound proxy for GitHub update checks
@@ -361,6 +364,7 @@ EOF
 fi
 
 ensure_config_setting "IAM_MONITORING_LOG_DIR" "${LOG_DIR}"
+ensure_config_setting "IAM_MONITORING_SERVICE_USER" "${SERVICE_USER}"
 ensure_config_setting "IAM_MONITORING_DEFAULT_COLLECTION_MINUTES" "$(grep -E '^IAM_MONITORING_DEFAULT_COLLECTION_MINUTES=' "${CONFIG_FILE}" | tail -n 1 | cut -d= -f2- || echo 60)"
 ensure_config_setting "IAM_MONITORING_SCHEDULER_MINUTES" "5"
 
