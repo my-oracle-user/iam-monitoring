@@ -121,10 +121,10 @@ return`<form id="environment-form" class="form">
 <div class="field"><label for="env-name">Environment Name</label><input id="env-name" name="name" value="${escapeHtml(environment.name||"")}" required></div>
 <div class="field field-span-2"><label for="env-description">Description</label><input id="env-description" name="description" value="${escapeHtml(environment.description||"")}"></div>
 <div class="field"><label for="environment-type">Environment Type</label><select id="environment-type" name="environmentType"><option value="oud" ${type==="oud"?"selected":""}>OUD</option><option value="oam" ${type==="oam"?"selected":""}>OAM</option><option value="oig" ${type==="oig"?"selected":""}>OIG</option><option value="oid" ${type==="oid"?"selected":""}>OID</option></select></div>
-<div class="field field-span-2" data-environment-panel="oud"><label class="checkbox-field" for="with-weblogic"><input id="with-weblogic" name="withWeblogic" type="checkbox" ${weblogicEnabled?"checked":""}>With WebLogic</label><p class="field-hint">Enable when this OUD environment also needs WebLogic runtime monitoring.</p></div>
+<div class="field field-span-2" data-environment-panel="oud"><label class="checkbox-field" for="with-weblogic"><input id="with-weblogic" name="withWeblogic" type="checkbox" ${weblogicEnabled?"checked":""}>With WebLogic</label></div>
 </div>
 </section>
-<section class="form-section" data-environment-panel="oud">
+<section class="form-section" data-environment-panel="oud" data-oud-only>
 <div class="form-section-header"><h4>Endpoint And Paths</h4><p class="form-section-copy">Core OUD host, SSH port, and filesystem paths.</p></div>
 <div class="form-grid">
 <div class="field"><label for="oud-host">OUD Host</label><input id="oud-host" name="oudHost" value="${escapeHtml(oud.host||server.host||"")}"></div>
@@ -135,7 +135,7 @@ return`<form id="environment-form" class="form">
 <div class="field"><label for="oud-admin-port">Admin Port</label><input id="oud-admin-port" name="oudAdminPort" type="number" value="${escapeHtml(oud.adminPort||4444)}"></div>
 </div>
 </section>
-<section class="form-section" data-environment-panel="oud">
+<section class="form-section" data-environment-panel="oud" data-oud-only>
 <div class="form-section-header"><h4>SSH Access</h4><p class="form-section-copy">SSH access is kept separate from Directory Manager credentials.</p></div>
 <div class="form-grid">
 <div class="field"><label for="server-ssh-mode">SSH Authentication</label><select id="server-ssh-mode" name="serverSshMode">${SSH_MODE_CHOICES.map(function(choice){return`<option value="${escapeHtml(choice.id)}" ${sshMode===choice.id?"selected":""}>${escapeHtml(choice.label)}</option>`;}).join("")}</select></div>
@@ -147,7 +147,7 @@ return`<form id="environment-form" class="form">
 <div class="field field-span-2"><p class="field-hint">Bootstrap uses this initial SSH access one time. After bootstrap, the dashboard switches the environment to its installed runtime SSH key for ongoing Run Jobs Now and scheduled collection.</p></div>
 </div>
 </section>
-<section class="form-section" data-environment-panel="oud">
+<section class="form-section" data-environment-panel="oud" data-oud-only>
 <div class="form-section-header"><h4>Directory Manager Credentials</h4><p class="form-section-copy">These credentials are used for OUD runtime and LDAP checks only.</p></div>
 <div class="form-grid">
 <div class="field"><label for="oud-bind-dn">Directory Manager Username</label><input id="oud-bind-dn" name="oudBindDn" value="${escapeHtml(oud.bindDn||"cn=Directory Manager")}"></div>
@@ -184,18 +184,18 @@ const sshMode=(form.elements.serverSshMode||{}).value||"root_password";
 const weblogicSshMode=(form.elements.weblogicAdminHostSshMode||{}).value||"root_password";
 const isOud=environmentType==="oud";
 const withWeblogic=Boolean((form.elements.withWeblogic||{}).checked)&&isOud;
+const showOudOnly=isOud&&!withWeblogic;
 const usesKey=sshModeUsesKey(sshMode);
 const usesRoot=sshMode.startsWith("root_");
 const weblogicUsesKey=sshModeUsesKey(weblogicSshMode);
 const weblogicUsesRoot=weblogicSshMode.startsWith("root_");
-form.querySelectorAll("[data-environment-panel='oud']").forEach(function(panel){panel.classList.toggle("hidden",!isOud);});
+form.querySelectorAll("[data-environment-panel='oud']").forEach(function(panel){const isWeblogicPanel=panel.hasAttribute("data-with-weblogic");const isOudOnlyPanel=panel.hasAttribute("data-oud-only");let hidden=!isOud;if(!hidden&&isWeblogicPanel)hidden=!withWeblogic;else if(!hidden&&isOudOnlyPanel)hidden=!showOudOnly;panel.classList.toggle("hidden",hidden);});
 form.querySelectorAll("[data-environment-panel='placeholder']").forEach(function(panel){panel.classList.toggle("hidden",isOud);});
-form.querySelectorAll("[data-with-weblogic]").forEach(function(panel){panel.classList.toggle("hidden",!withWeblogic);});
 const pendingCopy=document.getElementById("pending-type-copy");
 if(pendingCopy)pendingCopy.textContent=`${uppercaseType(environmentType)} detailed fields are intentionally left for the next expansion. The environment can be registered now with the basic fields above.`;
-form.querySelectorAll("[data-ssh-field='password']").forEach(function(field){field.classList.toggle("hidden",usesKey||!isOud);});
-form.querySelectorAll("[data-ssh-field='key']").forEach(function(field){field.classList.toggle("hidden",!usesKey||!isOud);});
-form.querySelectorAll("[data-ssh-field='passphrase']").forEach(function(field){field.classList.toggle("hidden",!usesKey||!isOud);});
+form.querySelectorAll("[data-ssh-field='password']").forEach(function(field){field.classList.toggle("hidden",usesKey||!showOudOnly);});
+form.querySelectorAll("[data-ssh-field='key']").forEach(function(field){field.classList.toggle("hidden",!usesKey||!showOudOnly);});
+form.querySelectorAll("[data-ssh-field='passphrase']").forEach(function(field){field.classList.toggle("hidden",!usesKey||!showOudOnly);});
 form.querySelectorAll("[data-weblogic-ssh-field='password']").forEach(function(field){field.classList.toggle("hidden",weblogicUsesKey||!withWeblogic);});
 form.querySelectorAll("[data-weblogic-ssh-field='key']").forEach(function(field){field.classList.toggle("hidden",!weblogicUsesKey||!withWeblogic);});
 form.querySelectorAll("[data-weblogic-ssh-field='passphrase']").forEach(function(field){field.classList.toggle("hidden",!weblogicUsesKey||!withWeblogic);});
@@ -210,7 +210,7 @@ else{if(weblogicUsernameInput.dataset.rootManaged==="1"&&String(weblogicUsername
 const scheduleInput=form.elements.collectionScheduleMinutes;
 if(scheduleInput&&form.elements.collectionEnabled){scheduleInput.disabled=!form.elements.collectionEnabled.checked;}
 const note=document.getElementById("ssh-mode-note");
-if(note){note.textContent=`${sshModeHelpText(sshMode)} After bootstrap, the dashboard switches to its installed runtime key.`;if(sshModeUsesSudo(sshMode))note.textContent+=" Sudo is expected for environment commands in this mode.";}
+if(note){note.textContent=showOudOnly?`${sshModeHelpText(sshMode)} After bootstrap, the dashboard switches to its installed runtime key.`:"";if(showOudOnly&&sshModeUsesSudo(sshMode))note.textContent+=" Sudo is expected for environment commands in this mode.";}
 const weblogicNote=document.getElementById("weblogic-admin-host-ssh-mode-note");
 if(weblogicNote){weblogicNote.textContent=`${sshModeHelpText(weblogicSshMode)} This admin host profile is used for WebLogic collection on every run.`;if(sshModeUsesSudo(weblogicSshMode))weblogicNote.textContent+=" Sudo is expected for WebLogic host commands in this mode.";}
 }
@@ -232,16 +232,20 @@ const isKeyMode=sshModeUsesKey(sshMode);
 const sshPort=parseInt(form.elements.serverPort.value,10)||22;
 const username=sshMode.startsWith("root_")?"root":String(form.elements.serverUsername.value||"").trim();
 const withWeblogic=Boolean(form.elements.withWeblogic.checked);
-if(!oudHost)throw new Error("OUD Host is required.");
-if(!username)throw new Error("OUD SSH Username is required.");
-payload.products.weblogic=withWeblogic;
-payload.serverMetrics.processMatchers=uniqueList(withWeblogic?[...processMatchers,"AdminServer","weblogic"]:processMatchers.filter(function(item){return !["AdminServer","weblogic"].includes(String(item||"").trim());}));
-payload.server={mode:"ssh",host:oudHost,port:sshPort,username:username,sshMode:sshMode,authType:isKeyMode?"private_key":"password",sudoRequired:sshModeUsesSudo(sshMode),password:isKeyMode?"":String(form.elements.serverPassword.value||""),privateKeyPath:isKeyMode?String(form.elements.serverKeyPath.value||"").trim():"",passphrase:isKeyMode?String(form.elements.serverPassphrase.value||""):""};
-payload.oud={host:oudHost,domainHome:String(form.elements.oudDomainHome.value||"").trim(),instanceHome:String(form.elements.oudInstanceHome.value||"").trim(),bindDn:String(form.elements.oudBindDn.value||"").trim()||"cn=Directory Manager",bindPassword:String(form.elements.oudBindPassword.value||""),ldapPort:parseInt(form.elements.oudLdapPort.value,10)||1389,adminPort:parseInt(form.elements.oudAdminPort.value,10)||4444,checks:coerceList((current.oud||{}).checks)};
 const weblogicServerNames=uniqueList(String(form.elements.weblogicServerNames?form.elements.weblogicServerNames.value:"").split(","));
 const weblogicAdminHostSshMode=String(form.elements.weblogicAdminHostSshMode?form.elements.weblogicAdminHostSshMode.value:"root_password");
 const weblogicAdminHostUsesKey=sshModeUsesKey(weblogicAdminHostSshMode);
 const weblogicAdminHostUsername=weblogicAdminHostSshMode.startsWith("root_")?"root":String(form.elements.weblogicAdminHostUsername?form.elements.weblogicAdminHostUsername.value:"").trim();
+const weblogicAdminHost=String(form.elements.weblogicAdminHost?form.elements.weblogicAdminHost.value:"").trim();
+const weblogicAdminHostPort=parseInt(form.elements.weblogicAdminHostPort?form.elements.weblogicAdminHostPort.value:22,10)||22;
+if(!withWeblogic){
+if(!oudHost)throw new Error("OUD Host is required.");
+if(!username)throw new Error("OUD SSH Username is required.");
+}
+payload.products.weblogic=withWeblogic;
+payload.serverMetrics.processMatchers=uniqueList(withWeblogic?[...processMatchers,"AdminServer","weblogic"]:processMatchers.filter(function(item){return !["AdminServer","weblogic"].includes(String(item||"").trim());}));
+payload.server={mode:"ssh",host:withWeblogic?(weblogicAdminHost||((current.server||{}).host||"")):oudHost,port:withWeblogic?weblogicAdminHostPort:sshPort,username:withWeblogic?(weblogicAdminHostUsername||((current.server||{}).username||"")):username,sshMode:withWeblogic?weblogicAdminHostSshMode:sshMode,authType:withWeblogic?(weblogicAdminHostUsesKey?"private_key":"password"):(isKeyMode?"private_key":"password"),sudoRequired:withWeblogic?sshModeUsesSudo(weblogicAdminHostSshMode):sshModeUsesSudo(sshMode),password:withWeblogic?(weblogicAdminHostUsesKey?"":String(form.elements.weblogicAdminHostPassword?form.elements.weblogicAdminHostPassword.value:"")):(isKeyMode?"":String(form.elements.serverPassword.value||"")),privateKeyPath:withWeblogic?(weblogicAdminHostUsesKey?String(form.elements.weblogicAdminHostKeyPath?form.elements.weblogicAdminHostKeyPath.value:"").trim():""):(isKeyMode?String(form.elements.serverKeyPath.value||"").trim():""),passphrase:withWeblogic?(weblogicAdminHostUsesKey?String(form.elements.weblogicAdminHostPassphrase?form.elements.weblogicAdminHostPassphrase.value:""):""):(isKeyMode?String(form.elements.serverPassphrase.value||""):"")};
+payload.oud={host:withWeblogic?(((current.oud||{}).host)||payload.server.host||""):oudHost,domainHome:withWeblogic?String(((current.oud||{}).domainHome)||"").trim():String(form.elements.oudDomainHome.value||"").trim(),instanceHome:withWeblogic?String(((current.oud||{}).instanceHome)||"").trim():String(form.elements.oudInstanceHome.value||"").trim(),bindDn:withWeblogic?(String(((current.oud||{}).bindDn)||"").trim()||"cn=Directory Manager"):(String(form.elements.oudBindDn.value||"").trim()||"cn=Directory Manager"),bindPassword:withWeblogic?"":String(form.elements.oudBindPassword.value||""),ldapPort:withWeblogic?(parseInt((current.oud||{}).ldapPort,10)||1389):(parseInt(form.elements.oudLdapPort.value,10)||1389),adminPort:withWeblogic?(parseInt((current.oud||{}).adminPort,10)||4444):(parseInt(form.elements.oudAdminPort.value,10)||4444),checks:coerceList((current.oud||{}).checks)};
 payload.weblogic=Object.assign({},payload.weblogic,{enabled:withWeblogic,adminUrl:String(form.elements.weblogicAdminUrl?form.elements.weblogicAdminUrl.value:"").trim(),adminUsername:String(form.elements.weblogicAdminUsername?form.elements.weblogicAdminUsername.value:"").trim()||"weblogic",adminPassword:String(form.elements.weblogicAdminPassword?form.elements.weblogicAdminPassword.value:""),adminHost:{mode:"ssh",host:String(form.elements.weblogicAdminHost?form.elements.weblogicAdminHost.value:"").trim(),port:parseInt(form.elements.weblogicAdminHostPort?form.elements.weblogicAdminHostPort.value:22,10)||22,username:weblogicAdminHostUsername,sshMode:weblogicAdminHostSshMode,authType:weblogicAdminHostUsesKey?"private_key":"password",sudoRequired:sshModeUsesSudo(weblogicAdminHostSshMode),password:weblogicAdminHostUsesKey?"":String(form.elements.weblogicAdminHostPassword?form.elements.weblogicAdminHostPassword.value:""),privateKeyPath:weblogicAdminHostUsesKey?String(form.elements.weblogicAdminHostKeyPath?form.elements.weblogicAdminHostKeyPath.value:"").trim():"",passphrase:weblogicAdminHostUsesKey?String(form.elements.weblogicAdminHostPassphrase?form.elements.weblogicAdminHostPassphrase.value:""):""},jstatPath:String(form.elements.weblogicJstatPath?form.elements.weblogicJstatPath.value:"").trim()||"/refresh/home/jdk-21.0.5/bin/jstat",serverNames:weblogicServerNames.length>0?weblogicServerNames:coerceList((current.weblogic||{}).serverNames)});
 if(withWeblogic){
 if(!payload.weblogic.adminUrl)throw new Error("WebLogic Admin URL is required when With WebLogic is selected.");
