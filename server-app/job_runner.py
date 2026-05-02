@@ -519,24 +519,24 @@ def collect_environment_now(db_path, environment_id, trigger="manual", progress=
         oud = environment.get("oud") or {}
         _emit_progress(
             progress,
-            "Collecting OUD runtime from host {0}; status path {1}; LDAP port {2}; admin port {3}.".format(
+            "Collecting OUD runtime from host {0}; instance home {1}; OUD root user {2}.".format(
                 oud.get("host") or server.get("host") or "-",
-                oud.get("statusPath") or "-",
-                oud.get("ldapPort") or 1389,
-                oud.get("adminPort") or 4444,
+                oud.get("instanceHome") or "-",
+                oud.get("bindDn") or "cn=Directory Manager",
             ),
         )
+        _emit_progress(progress, "Running ./status, ./dsreplication status -X --Advanced -n, ./start-ds -F, and ./start-ds -s from the OUD bin directory.")
     if (environment.get("products") or {}).get("weblogic"):
         weblogic = environment.get("weblogic") or {}
         admin_host = (weblogic.get("adminHost") or {}).get("host") or server.get("host") or "-"
         _emit_progress(
             progress,
-            "Collecting WebLogic runtime from admin host {0}; admin URL {1}; JSTAT path {2}.".format(
+            "Collecting WebLogic runtime from admin host {0}; admin URL {1}.".format(
                 admin_host,
                 weblogic.get("adminUrl") or "-",
-                weblogic.get("jstatPath") or "-",
             ),
         )
+        _emit_progress(progress, "Running WLST deployment-state collection from ORACLE_HOME/oracle_common/common/bin/wlst.sh.")
     started = time.time()
     try:
         dashboard = collect_environment_dashboard(environment)

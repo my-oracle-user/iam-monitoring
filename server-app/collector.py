@@ -2,6 +2,7 @@ import re
 import shlex
 import subprocess
 import time
+from urllib.parse import urlparse
 
 
 DEFAULT_SERVER_HEALTH_THRESHOLDS = {
@@ -500,59 +501,173 @@ def parse_jstat(text):
     }
 
 
+def parse_sectioned_output(text):
+    sections = {}
+    current = None
+    for raw_line in str(text or "").splitlines():
+        stripped = raw_line.strip()
+        heading = re.match(r"^-{3}\s*(.*?)\s*-{3}$", stripped)
+        if heading:
+            current = heading.group(1).strip()
+            sections[current] = []
+            continue
+        if current:
+            sections.setdefault(current, []).append(raw_line.rstrip())
+    return sections
+
+
+def parse_key_value_banner_output(text):
+    banner = ""
+    values = {}
+    for raw_line in str(text or "").splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        if not banner and ":" not in stripped:
+            banner = stripped
+            continue
+        if ":" not in stripped:
+            continue
+        key, value = stripped.split(":", 1)
+        values[key.strip()] = value.strip()
+    return {
+        "banner": banner,
+        "values": values,
+    }
+
+
 def parse_oud_status(text):
     summary = {}
     listeners = []
     backends = []
+    sections = parse_sectioned_output(text)
+
+    for section_name in ("Server Status", "Server Details"):
+        for raw_line in sections.get(section_name, []):
+            stripped = raw_line.strip()
+            if ":" not in stripped:
+                continue
+            key, value = stripped.split(":", 1)
+            summary[key.strip()] = value.strip()
+
+    for raw_line in sections.get("Connection Handlers", []):
+        stripped = raw_line.strip()
+        if (
+            not stripped
+            or stripped.startswith("Address:Port")
+            or stripped.startswith("-------------")
+        ):
+            continue
+        match = re.match(r"^(.*?)\s+:\s+(.*?)\s+:\s+(.*?)$", stripped)
+        if not match:
+            continue
+        listeners.append({
+            "addressPort": match.group(1).strip(),
+            "protocol": match.group(2).strip(),
+            "state": match.group(3).strip(),
+        })
+
     block = {}
 
-    def flush_block():
+    def flush_backend():
         if not block:
             return
-        if "Protocol" in block:
-            listeners.append({
-                "addressPort": block.get("Address:Port"),
-                "protocol": block.get("Protocol"),
-                "state": block.get("State"),
-            })
-        elif "Base DN" in block:
-            entries_value = block.get("Entries")
-            backends.append({
-                "baseDn": block.get("Base DN"),
-                "backendId": block.get("Backend ID"),
-                "entries": int(entries_value) if entries_value and str(entries_value).isdigit() else entries_value,
-                "replication": block.get("Replication"),
-            })
+        entries_value = block.get("Entries")
+        backends.append({
+            "baseDn": block.get("Base DN"),
+            "backendId": block.get("Backend ID"),
+            "entries": int(entries_value) if entries_value and str(entries_value).isdigit() else entries_value,
+            "replication": block.get("Replication"),
+        })
         block.clear()
 
-    for raw_line in lines(text):
-        if raw_line == "-":
-            flush_block()
+    for raw_line in sections.get("Data Sources", []):
+        stripped = raw_line.strip()
+        if not stripped:
+            flush_backend()
             continue
-
-        if raw_line.startswith("Address:Port:"):
-            key = "Address:Port"
-            value = raw_line[len("Address:Port:"):].strip()
-        else:
-            if ":" not in raw_line:
-                continue
-            key, value = raw_line.split(":", 1)
-            key = key.strip()
-            value = value.strip()
-
-        if key in ("Address:Port", "Protocol", "State", "Base DN", "Backend ID", "Entries", "Replication"):
-            block[key] = value
-        else:
-            flush_block()
-            summary[key] = value
-
-    flush_block()
+        if ":" not in stripped:
+            continue
+        key, value = stripped.split(":", 1)
+        block[key.strip()] = value.strip()
+    flush_backend()
 
     return {
         "summary": summary,
         "listeners": listeners,
         "backends": backends,
     }
+
+
+def parse_oud_replication(text):
+    sections = []
+    current = None
+    lines_buffer = []
+
+    def flush_section():
+        nonlocal current, lines_buffer
+        if current is None:
+            return
+        table_lines = []
+        for raw_line in lines_buffer:
+            stripped = raw_line.rstrip()
+            if not stripped.strip():
+                continue
+            if stripped.strip().startswith("Server ") or set(stripped.strip()) == {"=", "-"}:
+                continue
+            table_lines.append(stripped)
+
+        parsed_rows = []
+        pending_prefix = ""
+        for raw_line in table_lines:
+            stripped = raw_line.rstrip()
+            delimiter_count = len(re.findall(r"\s+:\s+", stripped))
+            if delimiter_count == 0:
+                pending_prefix += stripped.strip()
+                continue
+            combined = "{0}{1}".format(pending_prefix, stripped.lstrip()) if pending_prefix else stripped
+            pending_prefix = ""
+            parts = [part.strip() for part in re.split(r"\s+:\s+", combined) if part is not None]
+            if current.get("enabled"):
+                if len(parts) >= 7:
+                    parsed_rows.append({
+                        "server": parts[0],
+                        "entries": parts[1],
+                        "missingChanges": parts[2],
+                        "ageOfOldestMissingChange": parts[3],
+                        "port": parts[4],
+                        "status": parts[5],
+                        "conflicts": parts[6],
+                    })
+            else:
+                if len(parts) >= 3:
+                    parsed_rows.append({
+                        "server": parts[0],
+                        "entries": parts[1],
+                        "changeLog": parts[2],
+                    })
+
+        current["servers"] = parsed_rows
+        sections.append(current)
+        current = None
+        lines_buffer = []
+
+    for raw_line in str(text or "").splitlines():
+        stripped = raw_line.strip()
+        heading_match = re.match(r"^(.*?)\s*-\s*Replication\s+(Enabled|Disabled)$", stripped)
+        if heading_match:
+            flush_section()
+            current = {
+                "baseDn": heading_match.group(1).strip(),
+                "enabled": heading_match.group(2).strip().lower() == "enabled",
+                "servers": [],
+            }
+            continue
+        if current is not None:
+            lines_buffer.append(raw_line)
+
+    flush_section()
+    return sections
 
 
 def build_monitoring_target(monitoring_config):
@@ -794,6 +909,40 @@ def get_oud_root_dse(target, settings, fallback_password):
     return root
 
 
+def python_string_literal(value):
+    return str(value or "").replace("\\", "\\\\").replace("'", "\\'")
+
+
+def normalize_weblogic_connect_url(admin_url):
+    text = str(admin_url or "").strip()
+    if not text:
+        return ""
+    parsed = urlparse(text if "://" in text else "t3://{0}".format(text))
+    scheme = str(parsed.scheme or "t3").lower()
+    host = parsed.hostname or parsed.path
+    port = parsed.port
+    if not host:
+        return ""
+    if scheme in ("http", "https"):
+        scheme = "t3s" if scheme == "https" else "t3"
+    elif scheme not in ("t3", "t3s"):
+        scheme = "t3"
+    return "{0}://{1}{2}".format(scheme, host, ":{0}".format(port) if port else "")
+
+
+def parse_weblogic_deployments(text):
+    deployments = []
+    for raw_line in lines(text):
+        match = re.match(r"^(.*?)\s*:\s*(STATE_[A-Z_]+)\s*$", raw_line)
+        if not match:
+            continue
+        deployments.append({
+            "name": match.group(1).strip(),
+            "state": match.group(2).strip(),
+        })
+    return deployments
+
+
 def get_weblogic_metrics(target, environment):
     products = environment.get("products") or {}
     if not products.get("weblogic") and not products.get("oam"):
@@ -803,6 +952,10 @@ def get_weblogic_metrics(target, environment):
     settings = environment.get("weblogic") or {}
     server_names = settings.get("serverNames") or []
     jstat_path = settings.get("jstatPath")
+    admin_url = str(settings.get("adminUrl") or "").strip()
+    admin_username = str(settings.get("adminUsername") or "").strip()
+    admin_password = str(settings.get("adminPassword") or "").strip()
+    oracle_home = str(settings.get("oracleHome") or "").strip()
     process_patterns = ["Dweblogic.Name={0}".format(name) for name in server_names] if server_names else ["Dweblogic.Name="]
 
     process_result = run_target(
@@ -844,12 +997,64 @@ def get_weblogic_metrics(target, environment):
 
     found_names = [item.get("name") for item in servers]
     missing_servers = [name for name in server_names if name not in found_names]
+    deployments = []
+    deployment_error = None
+    deployment_connect_url = normalize_weblogic_connect_url(admin_url)
+    deployment_command = ""
+    if oracle_home and admin_username and admin_password and deployment_connect_url:
+        wlst_path = "{0}/oracle_common/common/bin/wlst.sh".format(oracle_home.rstrip("/"))
+        deployment_command = (
+            "scriptfile=$(mktemp /tmp/iam-monitoring-wlst.XXXXXX.py) && "
+            "trap 'rm -f \"$scriptfile\"' EXIT && "
+            "cat > \"$scriptfile\" <<'PY'\n"
+            "connect('{0}','{1}','{2}')\n"
+            "domainRuntime()\n"
+            "cd('/AppRuntimeStateRuntime/AppRuntimeStateRuntime')\n"
+            "apps = cmo.getApplicationIds()\n"
+            "print('\\n===== Application Deployment Status =====\\n')\n"
+            "for app in apps:\n"
+            "    print(app + ' : ' + cmo.getCurrentState(app, 'AdminServer'))\n"
+            "print('\\n=========================================\\n')\n"
+            "exit()\n"
+            "PY\n"
+            "{3} \"$scriptfile\""
+        ).format(
+            python_string_literal(admin_username),
+            python_string_literal(admin_password),
+            python_string_literal(deployment_connect_url),
+            shlex.quote(wlst_path),
+        )
+        deployment_result = run_target(target, deployment_command)
+        deployments = parse_weblogic_deployments(deployment_result.get("output"))
+        if deployment_result.get("exit_code") != 0 and not deployments:
+            deployment_error = deployment_result.get("output") or "WLST deployment status command failed."
+    else:
+        missing = []
+        if not oracle_home:
+            missing.append("ORACLE_HOME")
+        if not admin_url:
+            missing.append("WebLogic Admin URL")
+        if not admin_username:
+            missing.append("WebLogic Admin Username")
+        if not admin_password:
+            missing.append("WebLogic Admin Password")
+        if missing:
+            deployment_error = "Missing WebLogic deployment settings: {0}.".format(", ".join(missing))
+    active_deployments = [item for item in deployments if item.get("state") == "STATE_ACTIVE"]
+    inactive_deployments = [item for item in deployments if item.get("state") != "STATE_ACTIVE"]
 
     return {
         "expectedServers": server_names,
         "runningServers": len(servers),
         "missingServers": missing_servers,
         "servers": servers,
+        "deployments": deployments,
+        "deploymentCommand": "{0}/oracle_common/common/bin/wlst.sh".format(oracle_home.rstrip("/")) if oracle_home else "",
+        "deploymentConnectUrl": deployment_connect_url,
+        "deploymentError": deployment_error,
+        "deploymentCount": len(deployments),
+        "activeDeploymentCount": len(active_deployments),
+        "inactiveDeploymentCount": len(inactive_deployments),
     }
 
 
@@ -858,48 +1063,141 @@ def get_oud_metrics(target, environment):
         return None
 
     settings = environment.get("oud") or {}
-    status_path = settings.get("statusPath")
+    instance_home = str(settings.get("instanceHome") or "").strip()
     bind_dn = settings.get("bindDn")
-    bind_password = settings.get("bindPassword") or (environment.get("server") or {}).get("password")
-    if not status_path or not bind_dn or not bind_password:
+    bind_password = settings.get("bindPassword")
+    status_path = str(settings.get("statusPath") or "").strip()
+    bin_directory = "{0}/bin".format(instance_home.rstrip("/")) if instance_home else ""
+    if not bin_directory and status_path and "/" in status_path:
+        bin_directory = status_path.rsplit("/", 1)[0]
+    if not bin_directory:
         return {
-            "error": "OUD status path or credentials are not configured.",
+            "error": "OUD_INSTANCE_HOME Path is not configured.",
             "listeners": [],
             "backends": [],
+            "commands": [],
         }
 
-    command = (
-        'pwfile=$(mktemp); '
-        'trap \'rm -f "$pwfile"\' EXIT; '
-        'printf %s {0} > "$pwfile"; '
-        '{1} --bindDN {2} --bindPasswordFile "$pwfile" --trustAll --no-prompt --script-friendly'
-    ).format(
-        shlex.quote(bind_password),
-        shlex.quote(status_path),
-        shlex.quote(bind_dn),
+    status_command = 'cd {0} && pwfile=$(mktemp ./pwd.XXXXXX.txt) && trap \'rm -f "$pwfile"\' EXIT && printf %s {1} > "$pwfile" && chmod 600 "$pwfile" && ./status -D {2} -j "$pwfile"'.format(
+        shlex.quote(bin_directory),
+        shlex.quote(str(bind_password or "")),
+        shlex.quote(str(bind_dn or "")),
     )
+    replication_command = 'cd {0} && pwfile=$(mktemp ./pwd.XXXXXX.txt) && trap \'rm -f "$pwfile"\' EXIT && printf %s {1} > "$pwfile" && chmod 600 "$pwfile" && export COLUMNS=240 && ./dsreplication status -D {2} -j "$pwfile" -X --Advanced -n'.format(
+        shlex.quote(bin_directory),
+        shlex.quote(str(bind_password or "")),
+        shlex.quote(str(bind_dn or "")),
+    )
+    build_command = "cd {0} && ./start-ds -F".format(shlex.quote(bin_directory))
+    system_command = "cd {0} && ./start-ds -s".format(shlex.quote(bin_directory))
 
-    status_result = run_target(target, command)
-    parsed = parse_oud_status(status_result.get("output"))
-    root = get_oud_root_dse(target, settings, bind_password)
+    errors = []
+    status_output = ""
+    replication_output = ""
+    if bind_dn and bind_password:
+        status_result = run_target(target, status_command)
+        status_output = status_result.get("output")
+        if status_result.get("exit_code") != 0:
+            errors.append("status command failed: {0}".format(status_output or "unknown error"))
+        replication_result = run_target(target, replication_command)
+        replication_output = replication_result.get("output")
+        if replication_result.get("exit_code") != 0:
+            errors.append("dsreplication status failed: {0}".format(replication_output or "unknown error"))
+    else:
+        errors.append("OUD root user or password is not configured.")
+
+    build_result = run_target(target, build_command)
+    if build_result.get("exit_code") != 0:
+        errors.append("start-ds -F failed: {0}".format(build_result.get("output") or "unknown error"))
+
+    system_result = run_target(target, system_command)
+    if system_result.get("exit_code") != 0:
+        errors.append("start-ds -s failed: {0}".format(system_result.get("output") or "unknown error"))
+
+    parsed = parse_oud_status(status_output)
+    replication_sections = parse_oud_replication(replication_output)
+    build_info = parse_key_value_banner_output(build_result.get("output"))
+    system_info = parse_key_value_banner_output(system_result.get("output"))
     summary = parsed.get("summary") or {}
+    backends = parsed.get("backends") or []
     open_connections = summary.get("Open Connections")
+    system_values = system_info.get("values") or {}
+    build_values = build_info.get("values") or {}
+    replication_nodes = []
+    for section in replication_sections:
+        for server_row in section.get("servers") or []:
+            row = dict(server_row)
+            row["baseDn"] = section.get("baseDn")
+            row["replicationEnabled"] = bool(section.get("enabled"))
+            replication_nodes.append(row)
+    replication_enabled_sections = [section for section in replication_sections if section.get("enabled")]
+    replication_disabled_sections = [section for section in replication_sections if not section.get("enabled")]
+
+    def pretty_memory(key):
+        raw_value = system_values.get(key)
+        numeric = threshold_value(raw_value)
+        return humanize_bytes(numeric) if numeric is not None else raw_value
 
     return {
+        "error": "; ".join(errors) if errors else None,
+        "binDirectory": bin_directory,
+        "commands": [
+            {"label": "OUD Status", "command": 'cd {0} && ./status -D "{1}" -j <temporary password file>'.format(bin_directory, bind_dn or "cn=Directory Manager")},
+            {"label": "Replication Status", "command": 'cd {0} && ./dsreplication status -D "{1}" -j <temporary password file> -X --Advanced -n'.format(bin_directory, bind_dn or "cn=Directory Manager")},
+            {"label": "Build Version", "command": "cd {0} && ./start-ds -F".format(bin_directory)},
+            {"label": "Runtime System", "command": "cd {0} && ./start-ds -s".format(bin_directory)},
+        ],
         "serverRunStatus": summary.get("Server Run Status"),
         "openConnections": int(open_connections) if open_connections and str(open_connections).isdigit() else open_connections,
-        "hostName": summary.get("Host Name"),
-        "administrativeUsers": summary.get("Administrative Users"),
-        "installationPath": summary.get("Installation Path"),
-        "instancePath": summary.get("Instance Path"),
-        "version": summary.get("Version") or root.get("vendorVersion"),
-        "javaVersion": summary.get("Java Version"),
+        "hostName": summary.get("Host Name") or system_values.get("System Name"),
+        "administrativeUsers": summary.get("Administrative Users") or bind_dn,
+        "installationPath": summary.get("Installation Path") or system_values.get("Installation Directory"),
+        "instancePath": summary.get("Instance Path") or system_values.get("Instance Directory") or instance_home,
+        "version": summary.get("Version") or build_info.get("banner") or system_info.get("banner"),
+        "javaVersion": summary.get("Java Version") or system_values.get("JAVA Version") or build_values.get("Build Java Version"),
         "administrationConnector": summary.get("Administration Connector"),
         "listeners": parsed.get("listeners") or [],
-        "backends": parsed.get("backends") or [],
-        "namingContexts": root.get("namingContexts") or [],
-        "vendorName": root.get("vendorName"),
-        "vendorVersion": root.get("vendorVersion"),
+        "backends": backends,
+        "namingContexts": [item.get("baseDn") for item in backends if item.get("baseDn")],
+        "replicationSections": replication_sections,
+        "replicationNodes": replication_nodes,
+        "replicationEnabledCount": len(replication_enabled_sections),
+        "replicationDisabledCount": len(replication_disabled_sections),
+        "replicationNodeCount": len(replication_nodes),
+        "replicationConflictCount": sum(
+            int(row.get("conflicts") or 0)
+            for row in replication_nodes
+            if str(row.get("conflicts") or "").isdigit()
+        ),
+        "replicationNormalCount": len([
+            row for row in replication_nodes
+            if str(row.get("status") or "").strip().lower() == "normal"
+        ]),
+        "buildId": build_values.get("Build ID"),
+        "majorVersion": build_values.get("Major Version"),
+        "maintenanceVersion": build_values.get("Maintenance Version"),
+        "releaseVersion": build_values.get("Release Version"),
+        "componentVersion": build_values.get("Component Version"),
+        "platformVersion": build_values.get("Platform Version"),
+        "patchVersion": build_values.get("Patch Version"),
+        "labelIdentifier": build_values.get("Label Identifier"),
+        "debugBuild": build_values.get("Debug Build"),
+        "buildOs": build_values.get("Build OS"),
+        "buildUser": build_values.get("Build User"),
+        "buildJavaVersion": build_values.get("Build Java Version"),
+        "buildJavaVendor": build_values.get("Build Java Vendor"),
+        "buildJvmVersion": build_values.get("Build JVM Version"),
+        "buildJvmVendor": build_values.get("Build JVM Vendor"),
+        "jeVersion": system_values.get("JE Version"),
+        "javaHome": system_values.get("JAVA Home"),
+        "classPath": system_values.get("Class Path"),
+        "operatingSystem": system_values.get("Operating System"),
+        "jvmArchitecture": system_values.get("JVM Architecture"),
+        "systemName": system_values.get("System Name"),
+        "availableProcessors": system_values.get("Available Processors"),
+        "maxAvailableMemory": pretty_memory("Max Available Memory"),
+        "currentlyUsedMemory": pretty_memory("Currently Used Memory"),
+        "currentlyFreeMemory": pretty_memory("Currently Free Memory"),
     }
 
 
@@ -961,6 +1259,8 @@ def product_metrics_status(product_metrics):
     weblogic = product_metrics.get("weblogic") or {}
     if weblogic.get("error"):
         return "warning"
+    if weblogic.get("deploymentError"):
+        return "warning"
 
     expected_servers = weblogic.get("expectedServers") or []
     running_servers = weblogic.get("servers") or []
@@ -968,6 +1268,8 @@ def product_metrics_status(product_metrics):
     if expected_servers and not running_servers:
         return "down"
     if missing_servers:
+        return "warning"
+    if (weblogic.get("inactiveDeploymentCount") or 0) > 0:
         return "warning"
 
     oud = product_metrics.get("oud") or {}
