@@ -613,7 +613,7 @@ def parse_oud_replication(text):
             stripped = raw_line.rstrip()
             if not stripped.strip():
                 continue
-            if stripped.strip().startswith("Server ") or set(stripped.strip()) == {"=", "-"}:
+            if stripped.strip().startswith("Server ") or re.fullmatch(r"[-=:\s]+", stripped.strip()):
                 continue
             table_lines.append(stripped)
 
@@ -628,10 +628,13 @@ def parse_oud_replication(text):
             combined = "{0}{1}".format(pending_prefix, stripped.lstrip()) if pending_prefix else stripped
             pending_prefix = ""
             parts = [part.strip() for part in re.split(r"\s+:\s+", combined) if part is not None]
+            server_value = str(parts[0]).strip() if parts else ""
+            if not server_value or re.fullmatch(r"[-=:\s]+", server_value) or not re.search(r"[A-Za-z0-9]", server_value):
+                continue
             if current.get("enabled"):
                 if len(parts) >= 7:
                     parsed_rows.append({
-                        "server": parts[0],
+                        "server": server_value,
                         "entries": parts[1],
                         "missingChanges": parts[2],
                         "ageOfOldestMissingChange": parts[3],
@@ -642,7 +645,7 @@ def parse_oud_replication(text):
             else:
                 if len(parts) >= 3:
                     parsed_rows.append({
-                        "server": parts[0],
+                        "server": server_value,
                         "entries": parts[1],
                         "changeLog": parts[2],
                     })
@@ -1130,6 +1133,11 @@ def get_oud_metrics(target, environment):
             row["baseDn"] = section.get("baseDn")
             row["replicationEnabled"] = bool(section.get("enabled"))
             replication_nodes.append(row)
+    unique_replication_servers = sorted({
+        str(row.get("server") or "").strip()
+        for row in replication_nodes
+        if str(row.get("server") or "").strip()
+    })
     replication_enabled_sections = [section for section in replication_sections if section.get("enabled")]
     replication_disabled_sections = [section for section in replication_sections if not section.get("enabled")]
 
@@ -1163,7 +1171,8 @@ def get_oud_metrics(target, environment):
         "replicationNodes": replication_nodes,
         "replicationEnabledCount": len(replication_enabled_sections),
         "replicationDisabledCount": len(replication_disabled_sections),
-        "replicationNodeCount": len(replication_nodes),
+        "replicationNodeCount": len(unique_replication_servers),
+        "replicationNodeNames": unique_replication_servers,
         "replicationConflictCount": sum(
             int(row.get("conflicts") or 0)
             for row in replication_nodes
