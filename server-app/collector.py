@@ -946,6 +946,49 @@ def parse_weblogic_deployments(text):
     return deployments
 
 
+def parse_weblogic_server_inventory(text):
+    rows = []
+    header_seen = False
+    for raw_line in lines(text):
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("TYPE | SERVER | MACHINE | LISTEN_ADDRESS | IP | PORT | SSL_PORT | CLUSTER"):
+            header_seen = True
+            continue
+        if not header_seen or "|" not in stripped:
+            continue
+        parts = [part.strip() for part in stripped.split("|")]
+        if len(parts) < 8:
+            continue
+        rows.append({
+            "type": parts[0],
+            "name": parts[1],
+            "machine": parts[2],
+            "listenAddress": parts[3],
+            "ip": parts[4],
+            "port": parts[5],
+            "sslPort": parts[6],
+            "cluster": parts[7],
+        })
+    return rows
+
+
+def run_wlst_script(target, wlst_path, script_body):
+    command = (
+        "scriptfile=$(mktemp /tmp/iam-monitoring-wlst.XXXXXX.py) && "
+        "trap 'rm -f \"$scriptfile\"' EXIT && "
+        "cat > \"$scriptfile\" <<'PY'\n"
+        "{0}\n"
+        "PY\n"
+        "{1} \"$scriptfile\""
+    ).format(
+        script_body.rstrip(),
+        shlex.quote(wlst_path),
+    )
+    return command, run_target(target, command)
+
+
 def get_weblogic_metrics(target, environment):
     products = environment.get("products") or {}
     if not products.get("weblogic") and not products.get("oam"):
@@ -953,12 +996,94 @@ def get_weblogic_metrics(target, environment):
 
     target = build_weblogic_target(environment, target)
     settings = environment.get("weblogic") or {}
-    server_names = settings.get("serverNames") or []
+    configured_server_names = settings.get("serverNames") or []
     jstat_path = settings.get("jstatPath")
     admin_url = str(settings.get("adminUrl") or "").strip()
     admin_username = str(settings.get("adminUsername") or "").strip()
     admin_password = str(settings.get("adminPassword") or "").strip()
     oracle_home = str(settings.get("oracleHome") or "").strip()
+    server_inventory = []
+    server_inventory_error = None
+    server_inventory_command = ""
+    deployment_connect_url = normalize_weblogic_connect_url(admin_url)
+    deployment_command = ""
+    deployment_error = None
+    deployments = []
+
+    if oracle_home and admin_username and admin_password and deployment_connect_url:
+        wlst_path = "{0}/oracle_common/common/bin/wlst.sh".format(oracle_home.rstrip("/"))
+        inventory_script = (
+            "from java.net import InetAddress\n"
+            "connect('{0}','{1}','{2}')\n"
+            "domainConfig()\n"
+            "admin_server = cmo.getAdminServerName()\n"
+            "print('TYPE | SERVER | MACHINE | LISTEN_ADDRESS | IP | PORT | SSL_PORT | CLUSTER')\n"
+            "for server in cmo.getServers():\n"
+            "    machine = server.getMachine().getName() if server.getMachine() else 'None'\n"
+            "    listen_address = server.getListenAddress() or '0.0.0.0'\n"
+            "    port = str(server.getListenPort())\n"
+            "    ssl_port = 'None'\n"
+            "    ssl = server.getSSL()\n"
+            "    if ssl:\n"
+            "        ssl_port = str(ssl.getListenPort())\n"
+            "    cluster = server.getCluster().getName() if server.getCluster() else 'None'\n"
+            "    server_type = 'ADMIN' if server.getName() == admin_server else 'MANAGED'\n"
+            "    ip_value = 'None'\n"
+            "    try:\n"
+            "        resolver = listen_address\n"
+            "        if resolver in ('', '0.0.0.0', '::') and server.getMachine() and server.getMachine().getNodeManager():\n"
+            "            resolver = server.getMachine().getNodeManager().getListenAddress() or resolver\n"
+            "        if resolver and resolver not in ('0.0.0.0', '::'):\n"
+            "            ip_value = InetAddress.getByName(resolver).getHostAddress()\n"
+            "    except:\n"
+            "        pass\n"
+            "    print(server_type + ' | ' + server.getName() + ' | ' + machine + ' | ' + listen_address + ' | ' + ip_value + ' | ' + port + ' | ' + ssl_port + ' | ' + cluster)\n"
+            "exit()\n"
+        ).format(
+            python_string_literal(admin_username),
+            python_string_literal(admin_password),
+            python_string_literal(deployment_connect_url),
+        )
+        server_inventory_command, inventory_result = run_wlst_script(target, wlst_path, inventory_script)
+        server_inventory = parse_weblogic_server_inventory(inventory_result.get("output"))
+        if inventory_result.get("exit_code") != 0 and not server_inventory:
+            server_inventory_error = inventory_result.get("output") or "WLST server inventory command failed."
+
+        deployment_script = (
+            "connect('{0}','{1}','{2}')\n"
+            "domainRuntime()\n"
+            "cd('/AppRuntimeStateRuntime/AppRuntimeStateRuntime')\n"
+            "apps = cmo.getApplicationIds()\n"
+            "print('\\n===== Application Deployment Status =====\\n')\n"
+            "for app in apps:\n"
+            "    print(app + ' : ' + cmo.getCurrentState(app, 'AdminServer'))\n"
+            "print('\\n=========================================\\n')\n"
+            "exit()\n"
+        ).format(
+            python_string_literal(admin_username),
+            python_string_literal(admin_password),
+            python_string_literal(deployment_connect_url),
+        )
+        deployment_command, deployment_result = run_wlst_script(target, wlst_path, deployment_script)
+        deployments = parse_weblogic_deployments(deployment_result.get("output"))
+        if deployment_result.get("exit_code") != 0 and not deployments:
+            deployment_error = deployment_result.get("output") or "WLST deployment status command failed."
+    else:
+        missing = []
+        if not oracle_home:
+            missing.append("ORACLE_HOME")
+        if not admin_url:
+            missing.append("WebLogic Admin URL")
+        if not admin_username:
+            missing.append("WebLogic Admin Username")
+        if not admin_password:
+            missing.append("WebLogic Admin Password")
+        if missing:
+            missing_text = "Missing WebLogic deployment settings: {0}.".format(", ".join(missing))
+            server_inventory_error = missing_text
+            deployment_error = missing_text
+
+    server_names = [item.get("name") for item in server_inventory if item.get("name")] or configured_server_names
     process_patterns = ["Dweblogic.Name={0}".format(name) for name in server_names] if server_names else ["Dweblogic.Name="]
 
     process_result = run_target(
@@ -1000,49 +1125,6 @@ def get_weblogic_metrics(target, environment):
 
     found_names = [item.get("name") for item in servers]
     missing_servers = [name for name in server_names if name not in found_names]
-    deployments = []
-    deployment_error = None
-    deployment_connect_url = normalize_weblogic_connect_url(admin_url)
-    deployment_command = ""
-    if oracle_home and admin_username and admin_password and deployment_connect_url:
-        wlst_path = "{0}/oracle_common/common/bin/wlst.sh".format(oracle_home.rstrip("/"))
-        deployment_command = (
-            "scriptfile=$(mktemp /tmp/iam-monitoring-wlst.XXXXXX.py) && "
-            "trap 'rm -f \"$scriptfile\"' EXIT && "
-            "cat > \"$scriptfile\" <<'PY'\n"
-            "connect('{0}','{1}','{2}')\n"
-            "domainRuntime()\n"
-            "cd('/AppRuntimeStateRuntime/AppRuntimeStateRuntime')\n"
-            "apps = cmo.getApplicationIds()\n"
-            "print('\\n===== Application Deployment Status =====\\n')\n"
-            "for app in apps:\n"
-            "    print(app + ' : ' + cmo.getCurrentState(app, 'AdminServer'))\n"
-            "print('\\n=========================================\\n')\n"
-            "exit()\n"
-            "PY\n"
-            "{3} \"$scriptfile\""
-        ).format(
-            python_string_literal(admin_username),
-            python_string_literal(admin_password),
-            python_string_literal(deployment_connect_url),
-            shlex.quote(wlst_path),
-        )
-        deployment_result = run_target(target, deployment_command)
-        deployments = parse_weblogic_deployments(deployment_result.get("output"))
-        if deployment_result.get("exit_code") != 0 and not deployments:
-            deployment_error = deployment_result.get("output") or "WLST deployment status command failed."
-    else:
-        missing = []
-        if not oracle_home:
-            missing.append("ORACLE_HOME")
-        if not admin_url:
-            missing.append("WebLogic Admin URL")
-        if not admin_username:
-            missing.append("WebLogic Admin Username")
-        if not admin_password:
-            missing.append("WebLogic Admin Password")
-        if missing:
-            deployment_error = "Missing WebLogic deployment settings: {0}.".format(", ".join(missing))
     active_deployments = [item for item in deployments if item.get("state") == "STATE_ACTIVE"]
     inactive_deployments = [item for item in deployments if item.get("state") != "STATE_ACTIVE"]
 
@@ -1051,6 +1133,10 @@ def get_weblogic_metrics(target, environment):
         "runningServers": len(servers),
         "missingServers": missing_servers,
         "servers": servers,
+        "serverInventory": server_inventory,
+        "serverInventoryCount": len(server_inventory),
+        "serverInventoryCommand": "{0}/oracle_common/common/bin/wlst.sh".format(oracle_home.rstrip("/")) if oracle_home else "",
+        "serverInventoryError": server_inventory_error,
         "deployments": deployments,
         "deploymentCommand": "{0}/oracle_common/common/bin/wlst.sh".format(oracle_home.rstrip("/")) if oracle_home else "",
         "deploymentConnectUrl": deployment_connect_url,
