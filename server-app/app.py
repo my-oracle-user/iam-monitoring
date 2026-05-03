@@ -987,7 +987,13 @@ class Handler(BaseHTTPRequestHandler):
             load_runtime_config()
             if not get_environment(DB_PATH, environment_id, include_secret=True):
                 return self.send_json(404, {"error": "Environment not found."})
-            environment = bootstrap_environment_runtime(DB_PATH, environment_id)
+            payload = parse_json_body(self)
+            initial_target_override = (payload or {}).get("initialTarget") or {}
+            environment = bootstrap_environment_runtime(
+                DB_PATH,
+                environment_id,
+                initial_target_override=initial_target_override,
+            )
             job_status, started = launch_collection_job(DB_PATH, environment_id, trigger="bootstrap")
             CACHE.invalidate(environment_id)
             self.send_json(

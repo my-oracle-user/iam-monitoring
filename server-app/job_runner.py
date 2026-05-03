@@ -393,7 +393,7 @@ def _runtime_target(environment, private_key_path):
     }
 
 
-def bootstrap_environment_runtime(db_path, environment_id):
+def bootstrap_environment_runtime(db_path, environment_id, initial_target_override=None):
     environment = get_environment(db_path, environment_id, include_secret=True)
     if not environment:
         raise KeyError("Environment not found.")
@@ -416,7 +416,25 @@ def bootstrap_environment_runtime(db_path, environment_id):
         "grep -qxF {0} ~/.ssh/authorized_keys 2>/dev/null || echo {0} >> ~/.ssh/authorized_keys"
     ).format(shlex.quote(public_key))
 
-    bootstrap_result = run_target(_bootstrap_target(environment), install_command)
+    bootstrap_target = _bootstrap_target(environment)
+    override_target = initial_target_override or {}
+    if override_target:
+        bootstrap_target.update(
+            {
+                "mode": override_target.get("mode") or bootstrap_target.get("mode") or "ssh",
+                "host": override_target.get("host") or bootstrap_target.get("host") or "",
+                "port": override_target.get("port") or bootstrap_target.get("port") or 22,
+                "username": override_target.get("username") or bootstrap_target.get("username") or "",
+                "sshMode": override_target.get("sshMode") or bootstrap_target.get("sshMode") or "root_password",
+                "authType": override_target.get("authType") or bootstrap_target.get("authType") or "password",
+                "password": override_target.get("password") if "password" in override_target else bootstrap_target.get("password") or "",
+                "privateKeyPath": override_target.get("privateKeyPath") or bootstrap_target.get("privateKeyPath") or "",
+                "passphrase": override_target.get("passphrase") if "passphrase" in override_target else bootstrap_target.get("passphrase") or "",
+                "sudoRequired": False,
+            }
+        )
+
+    bootstrap_result = run_target(bootstrap_target, install_command)
     if bootstrap_result.get("exit_code") != 0:
         raise ValueError(
             "Bootstrap could not install the runtime SSH key with the current initial SSH access. {0}".format(

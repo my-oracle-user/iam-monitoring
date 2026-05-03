@@ -119,6 +119,19 @@ def normalize_environment_type(value, fallback=""):
     return fallback
 
 
+def has_weblogic_profile(products=None, weblogic=None):
+    product_flags = products or {}
+    weblogic_config = weblogic or {}
+    admin_host = weblogic_config.get("adminHost") or {}
+    return bool(
+        coerce_bool(product_flags.get("weblogic"), False)
+        or coerce_bool(weblogic_config.get("enabled"), False)
+        or str(weblogic_config.get("adminUrl") or "").strip()
+        or str(weblogic_config.get("oracleHome") or "").strip()
+        or str(admin_host.get("host") or "").strip()
+    )
+
+
 def normalize_ssh_mode(value, fallback="root_password"):
     text = str(value or "").strip().lower()
     if text in ("root_password", "user_password", "user_password_sudo", "root_key", "user_key", "user_key_sudo"):
@@ -402,11 +415,15 @@ def normalize_environment(payload, existing=None):
         4444,
     )
     derived_ldap_url = "ldap://localhost:{0}".format(ldap_port)
+    existing_weblogic_profile = has_weblogic_profile(existing_products, existing_weblogic)
+    payload_weblogic_profile = has_weblogic_profile(products_payload, weblogic_payload)
     weblogic_enabled = coerce_bool(
         weblogic_payload.get("enabled"),
         existing_weblogic.get("enabled", products.get("weblogic")),
     )
     if environment_type == "oud":
+        if existing_weblogic_profile or payload_weblogic_profile:
+            weblogic_enabled = True
         products["weblogic"] = bool(weblogic_enabled)
 
     environment = {

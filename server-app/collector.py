@@ -279,6 +279,32 @@ def run_target(target, command):
     return run_ssh(target, command)
 
 
+def _matching_ssh_profiles(primary, secondary):
+    primary = primary or {}
+    secondary = secondary or {}
+    return (
+        str(primary.get("host") or "").strip() == str(secondary.get("host") or "").strip()
+        and str(primary.get("port") or 22).strip() == str(secondary.get("port") or 22).strip()
+        and str(primary.get("username") or "").strip() == str(secondary.get("username") or "").strip()
+        and str(primary.get("sshMode") or "").strip() == str(secondary.get("sshMode") or "").strip()
+        and str(primary.get("authType") or "").strip() == str(secondary.get("authType") or "").strip()
+    )
+
+
+def _effective_environment_server(environment):
+    server = dict(environment.get("server") or {})
+    weblogic = environment.get("weblogic") or {}
+    admin_host = weblogic.get("adminHost") or {}
+    if _matching_ssh_profiles(server, admin_host):
+        if not str(server.get("password") or "").strip() and str(admin_host.get("password") or "").strip():
+            server["password"] = admin_host.get("password") or ""
+        if not str(server.get("privateKeyPath") or "").strip() and str(admin_host.get("privateKeyPath") or "").strip():
+            server["privateKeyPath"] = admin_host.get("privateKeyPath") or ""
+        if not str(server.get("passphrase") or "").strip() and str(admin_host.get("passphrase") or "").strip():
+            server["passphrase"] = admin_host.get("passphrase") or ""
+    return server
+
+
 def parse_memory(text):
     for line in lines(text):
         if line.startswith("Mem:"):
@@ -687,7 +713,7 @@ def build_monitoring_target(monitoring_config):
 
 
 def build_environment_target(environment):
-    server = environment.get("server") or {}
+    server = _effective_environment_server(environment)
     bootstrap = environment.get("bootstrap") or {}
     username = server.get("username") or "root"
     sudo_required = bool(server.get("sudoRequired"))
