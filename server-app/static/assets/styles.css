@@ -109,25 +109,11 @@ img {
 }
 
 .oracle-mark {
-    width: 42px;
+    width: 48px;
     height: 24px;
-    border: 4px solid #ffffff;
-    border-radius: 999px;
-    position: relative;
     flex: 0 0 auto;
-}
-
-.oracle-mark::before,
-.oracle-mark::after {
-    content: "";
-    position: absolute;
-    left: -4px;
-    width: 42px;
-    height: 24px;
-    border: 4px solid transparent;
-    border-top-color: #ffffff;
-    border-bottom-color: #ffffff;
-    border-radius: 999px;
+    color: #ffffff;
+    overflow: visible;
 }
 
 .topbar-kicker {
