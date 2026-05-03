@@ -837,6 +837,32 @@ tbody tr:last-child td {
     line-height: 1.45;
 }
 
+.collector-running-note {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 14px;
+    color: var(--ink-soft);
+    font-size: 0.94rem;
+    line-height: 1.45;
+}
+
+.inline-spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(199, 70, 52, 0.2);
+    border-top-color: var(--oracle-red);
+    border-radius: 50%;
+    flex: 0 0 auto;
+    animation: collector-spinner-rotate 0.9s linear infinite;
+}
+
+@keyframes collector-spinner-rotate {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
 .row-actions {
     display: flex;
     flex-wrap: wrap;

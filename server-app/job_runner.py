@@ -557,7 +557,7 @@ def collect_environment_now(db_path, environment_id, trigger="manual", progress=
         _emit_progress(progress, "Running WLST deployment-state collection from ORACLE_HOME/oracle_common/common/bin/wlst.sh.")
     started = time.time()
     try:
-        dashboard = collect_environment_dashboard(environment)
+        dashboard = collect_environment_dashboard(environment, progress=progress)
         duration_ms = int((time.time() - started) * 1000)
         snapshot_path = _snapshot_path(db_path, environment_id)
         dashboard = _decorate_dashboard(environment, dashboard, trigger, runtime_env_path, duration_ms, snapshot_path, db_path)

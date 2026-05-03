@@ -355,6 +355,50 @@ def humanize_bytes(value):
     return "{0:.1f} {1}".format(amount, units[index])
 
 
+def resolve_existing_directory(target, candidates):
+    paths = [str(item or "").strip() for item in (candidates or []) if str(item or "").strip()]
+    if not paths:
+        return ""
+    command = "for path in {0}; do if [ -d \"$path\" ]; then printf '%s' \"$path\"; break; fi; done".format(
+        " ".join(shlex.quote(path) for path in paths)
+    )
+    result = run_target(target, command)
+    if result.get("exit_code") != 0:
+        return ""
+    return str(result.get("output") or "").strip()
+
+
+def directory_size_label(target, directory_path):
+    path = str(directory_path or "").strip()
+    if not path:
+        return None
+    result = run_target(
+        target,
+        "if [ -d {0} ]; then du -sk {0} 2>/dev/null | awk '{{print $1}}'; fi".format(shlex.quote(path)),
+    )
+    if result.get("exit_code") != 0:
+        return None
+    output = str(result.get("output") or "").strip()
+    if output.isdigit():
+        return humanize_bytes(int(output) * 1024)
+    return output or None
+
+
+def schema_match_files(target, schema_directory):
+    path = str(schema_directory or "").strip()
+    if not path:
+        return []
+    result = run_target(
+        target,
+        "if [ -d {0} ]; then cd {0} && grep -RilE 'attribute|objectClasses' . 2>/dev/null | sed 's#^\\./##'; fi".format(
+            shlex.quote(path)
+        ),
+    )
+    if result.get("exit_code") != 0:
+        return []
+    return [line for line in lines(result.get("output")) if line]
+
+
 def parse_meminfo_proc(text):
     values = {}
     for raw_line in lines(text):
@@ -1001,7 +1045,7 @@ def parse_weblogic_server_inventory(text):
     return rows
 
 
-def run_wlst_script(target, wlst_path, script_body, timeout=90):
+def run_wlst_script(target, wlst_path, script_body, timeout=180):
     command = (
         "scriptfile=$(mktemp /tmp/iam-monitoring-wlst.XXXXXX.py) && "
         "trap 'rm -f \"$scriptfile\"' EXIT && "
@@ -1029,7 +1073,7 @@ def weblogic_profile_configured(environment):
     )
 
 
-def get_weblogic_metrics(target, environment):
+def get_weblogic_metrics(target, environment, progress=None):
     if not weblogic_profile_configured(environment):
         return None
 
@@ -1053,6 +1097,8 @@ def get_weblogic_metrics(target, environment):
 
     if weblogic_ready:
         wlst_path = "{0}/oracle_common/common/bin/wlst.sh".format(oracle_home.rstrip("/"))
+        if callable(progress):
+            progress("Starting WLST server inventory collection from ORACLE_HOME/oracle_common/common/bin/wlst.sh.")
         inventory_script = (
             "from java.net import InetAddress\n"
             "connect('{0}','{1}','{2}')\n"
@@ -1092,9 +1138,17 @@ def get_weblogic_metrics(target, environment):
         )
         server_inventory_command, inventory_result = run_wlst_script(target, wlst_path, inventory_script)
         server_inventory = parse_weblogic_server_inventory(inventory_result.get("output"))
-        if inventory_result.get("exit_code") != 0 and not server_inventory:
-            server_inventory_error = inventory_result.get("output") or "WLST server inventory command failed."
+        inventory_output = str(inventory_result.get("output") or "").strip()
+        if server_inventory:
+            if callable(progress):
+                progress("WLST server inventory returned {0} server row(s).".format(len(server_inventory)))
+        else:
+            server_inventory_error = inventory_output or "WLST server inventory command failed."
+            if callable(progress):
+                progress("WLST server inventory returned no parsed rows.")
 
+        if callable(progress):
+            progress("Starting WLST deployment-state collection from ORACLE_HOME/oracle_common/common/bin/wlst.sh.")
         deployment_script = (
             "connect('{0}','{1}','{2}')\n"
             "domainRuntime()\n"
@@ -1112,8 +1166,14 @@ def get_weblogic_metrics(target, environment):
         )
         deployment_command, deployment_result = run_wlst_script(target, wlst_path, deployment_script)
         deployments = parse_weblogic_deployments(deployment_result.get("output"))
-        if deployment_result.get("exit_code") != 0 and not deployments:
-            deployment_error = deployment_result.get("output") or "WLST deployment status command failed."
+        deployment_output = str(deployment_result.get("output") or "").strip()
+        if deployments:
+            if callable(progress):
+                progress("WLST deployment-state returned {0} deployment row(s).".format(len(deployments)))
+        else:
+            deployment_error = deployment_output or "WLST deployment status command failed."
+            if callable(progress):
+                progress("WLST deployment-state returned no parsed rows.")
     else:
         missing = []
         if not oracle_home:
@@ -1261,6 +1321,20 @@ def get_oud_metrics(target, environment):
     open_connections = summary.get("Open Connections")
     system_values = system_info.get("values") or {}
     build_values = build_info.get("values") or {}
+    db_directory = resolve_existing_directory(target, [
+        "{0}/db".format(instance_home.rstrip("/")) if instance_home else "",
+    ])
+    changelog_db_directory = resolve_existing_directory(target, [
+        "{0}/changelogDB".format(instance_home.rstrip("/")) if instance_home else "",
+        "{0}/changelogDb".format(instance_home.rstrip("/")) if instance_home else "",
+    ])
+    schema_directory = resolve_existing_directory(target, [
+        "{0}/config/schema".format(instance_home.rstrip("/")) if instance_home else "",
+        "{0}/cnfig/schema".format(instance_home.rstrip("/")) if instance_home else "",
+    ])
+    db_size = directory_size_label(target, db_directory)
+    changelog_db_size = directory_size_label(target, changelog_db_directory)
+    custom_schema_files = schema_match_files(target, schema_directory)
     replication_nodes = []
     for section in replication_sections:
         for server_row in section.get("servers") or []:
@@ -1296,6 +1370,12 @@ def get_oud_metrics(target, environment):
         "administrativeUsers": summary.get("Administrative Users") or bind_dn,
         "installationPath": summary.get("Installation Path") or system_values.get("Installation Directory"),
         "instancePath": summary.get("Instance Path") or system_values.get("Instance Directory") or instance_home,
+        "dbSize": db_size,
+        "changelogDbSize": changelog_db_size,
+        "customSchemaPresent": bool(custom_schema_files),
+        "customSchemaFiles": custom_schema_files,
+        "customSchemaCount": len(custom_schema_files),
+        "customSchemaDirectory": schema_directory or None,
         "version": summary.get("Version") or build_info.get("banner") or system_info.get("banner"),
         "javaVersion": summary.get("Java Version") or system_values.get("JAVA Version") or build_values.get("Build Java Version"),
         "administrationConnector": summary.get("Administration Connector"),
@@ -1363,10 +1443,10 @@ def get_oig_metrics(environment, app_checks):
     }
 
 
-def get_product_metrics(target, environment, app_checks):
+def get_product_metrics(target, environment, app_checks, progress=None):
     weblogic_metrics = None
     try:
-        weblogic_metrics = get_weblogic_metrics(target, environment)
+        weblogic_metrics = get_weblogic_metrics(target, environment, progress=progress)
     except Exception as exc:
         weblogic_metrics = {
             "error": str(exc),
@@ -1503,7 +1583,7 @@ def collect_monitoring_server(monitoring_config):
     }
 
 
-def collect_environment_dashboard(environment):
+def collect_environment_dashboard(environment, progress=None):
     target = build_environment_target(environment)
     server_metrics = environment.get("serverMetrics") or {}
     server = get_server_snapshot(
@@ -1513,7 +1593,7 @@ def collect_environment_dashboard(environment):
     )
     server["health"] = build_server_health(server)
     app_checks = collect_app_checks(target, environment)
-    product_metrics = get_product_metrics(target, environment, app_checks)
+    product_metrics = get_product_metrics(target, environment, app_checks, progress=progress)
     status = target_status(server, app_checks, product_metrics)
     if server.get("reachable"):
         server["status"] = status
