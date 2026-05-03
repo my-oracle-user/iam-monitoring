@@ -182,7 +182,7 @@ def build_server_health(server_snapshot):
     }
 
 
-def run_local(command):
+def run_local(command, timeout=25):
     try:
         process = subprocess.Popen(
             ["bash", "-lc", command],
@@ -190,7 +190,7 @@ def run_local(command):
             stderr=subprocess.STDOUT,
             universal_newlines=True,
         )
-        output, _ = process.communicate(timeout=25)
+        output, _ = process.communicate(timeout=timeout)
         return {"exit_code": process.returncode, "output": (output or "").strip()}
     except subprocess.TimeoutExpired:
         process.kill()
@@ -198,7 +198,7 @@ def run_local(command):
         return {"exit_code": 1, "output": ((output or "").strip() or "Local command timed out.")}
 
 
-def run_ssh(target, command):
+def run_ssh(target, command, timeout=25):
     auth_type = str(target.get("authType") or "password").lower()
     remote_command = "bash -lc {0}".format(shlex.quote(command))
     if target.get("sudoRequired"):
@@ -260,7 +260,7 @@ def run_ssh(target, command):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             universal_newlines=True,
-            timeout=25,
+            timeout=timeout,
             check=False,
         )
         return {
@@ -273,10 +273,10 @@ def run_ssh(target, command):
         return {"exit_code": 1, "output": ((exc.stdout or "").strip() or "SSH command timed out.")}
 
 
-def run_target(target, command):
+def run_target(target, command, timeout=25):
     if target.get("mode") == "local":
-        return run_local(command)
-    return run_ssh(target, command)
+        return run_local(command, timeout=timeout)
+    return run_ssh(target, command, timeout=timeout)
 
 
 def _matching_ssh_profiles(primary, secondary):
@@ -1001,7 +1001,7 @@ def parse_weblogic_server_inventory(text):
     return rows
 
 
-def run_wlst_script(target, wlst_path, script_body):
+def run_wlst_script(target, wlst_path, script_body, timeout=90):
     command = (
         "scriptfile=$(mktemp /tmp/iam-monitoring-wlst.XXXXXX.py) && "
         "trap 'rm -f \"$scriptfile\"' EXIT && "
@@ -1013,7 +1013,7 @@ def run_wlst_script(target, wlst_path, script_body):
         script_body.rstrip(),
         shlex.quote(wlst_path),
     )
-    return command, run_target(target, command)
+    return command, run_target(target, command, timeout=timeout)
 
 
 def weblogic_profile_configured(environment):
