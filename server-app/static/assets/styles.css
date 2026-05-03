@@ -972,22 +972,59 @@ tbody tr:last-child td {
     text-transform: uppercase;
 }
 
-.terminal-bar span {
+.terminal-chrome {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+}
+
+.terminal-dot {
     width: 10px;
     height: 10px;
     border-radius: 50%;
 }
 
-.terminal-bar span:nth-child(1) {
+.terminal-dot:nth-child(1) {
     background: #ff6b5f;
 }
 
-.terminal-bar span:nth-child(2) {
+.terminal-dot:nth-child(2) {
     background: #f3c14f;
 }
 
-.terminal-bar span:nth-child(3) {
+.terminal-dot:nth-child(3) {
     background: #58c06b;
+}
+
+.terminal-title {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.terminal-live {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(88, 192, 107, 0.28);
+    background: rgba(88, 192, 107, 0.12);
+    color: #9fe0ac;
+    font-size: 0.74rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    flex: 0 0 auto;
+}
+
+.terminal-live-spinner {
+    width: 11px;
+    height: 11px;
+    border: 2px solid rgba(159, 224, 172, 0.24);
+    border-top-color: currentColor;
+    border-radius: 50%;
+    animation: collector-spinner-rotate 0.9s linear infinite;
 }
 
 .terminal-body {
