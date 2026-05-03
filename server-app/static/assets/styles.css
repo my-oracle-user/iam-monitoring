@@ -505,6 +505,21 @@ textarea {
 
 .status-pill {
     border: 1px solid transparent;
+    gap: 0;
+}
+
+.status-pill.is-spinning {
+    gap: 8px;
+}
+
+.status-pill-spinner {
+    width: 12px;
+    height: 12px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-top-color: currentColor;
+    border-radius: 50%;
+    flex: 0 0 auto;
+    animation: collector-spinner-rotate 0.9s linear infinite;
 }
 
 .status-pill.is-healthy {
@@ -746,6 +761,10 @@ textarea {
     opacity: 0.65;
     cursor: default;
     transform: none;
+}
+
+.button.is-running {
+    gap: 10px;
 }
 
 .definition-list {
