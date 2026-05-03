@@ -953,23 +953,24 @@ def parse_weblogic_server_inventory(text):
         stripped = raw_line.strip()
         if not stripped:
             continue
-        if stripped.startswith("TYPE | SERVER | MACHINE | LISTEN_ADDRESS | IP | PORT | SSL_PORT | CLUSTER"):
+        if stripped.startswith("TYPE | SERVER | STATE | MACHINE | LISTEN_ADDRESS | IP | PORT | SSL_PORT | CLUSTER"):
             header_seen = True
             continue
         if not header_seen or "|" not in stripped:
             continue
         parts = [part.strip() for part in stripped.split("|")]
-        if len(parts) < 8:
+        if len(parts) < 9:
             continue
         rows.append({
             "type": parts[0],
             "name": parts[1],
-            "machine": parts[2],
-            "listenAddress": parts[3],
-            "ip": parts[4],
-            "port": parts[5],
-            "sslPort": parts[6],
-            "cluster": parts[7],
+            "state": parts[2],
+            "machine": parts[3],
+            "listenAddress": parts[4],
+            "ip": parts[5],
+            "port": parts[6],
+            "sslPort": parts[7],
+            "cluster": parts[8],
         })
     return rows
 
@@ -989,11 +990,24 @@ def run_wlst_script(target, wlst_path, script_body):
     return command, run_target(target, command)
 
 
+def weblogic_profile_configured(environment):
+    weblogic = environment.get("weblogic") or {}
+    admin_host = weblogic.get("adminHost") or {}
+    return bool(
+        (environment.get("products") or {}).get("weblogic")
+        or (environment.get("products") or {}).get("oam")
+        or weblogic.get("enabled")
+        or str(weblogic.get("adminUrl") or "").strip()
+        or str(weblogic.get("oracleHome") or "").strip()
+        or str(admin_host.get("host") or "").strip()
+    )
+
+
 def get_weblogic_metrics(target, environment):
-    products = environment.get("products") or {}
-    if not products.get("weblogic") and not products.get("oam"):
+    if not weblogic_profile_configured(environment):
         return None
 
+    products = environment.get("products") or {}
     target = build_weblogic_target(environment, target)
     settings = environment.get("weblogic") or {}
     jstat_path = settings.get("jstatPath")
@@ -1016,10 +1030,14 @@ def get_weblogic_metrics(target, environment):
         inventory_script = (
             "from java.net import InetAddress\n"
             "connect('{0}','{1}','{2}')\n"
+            "print('TYPE | SERVER | STATE | MACHINE | LISTEN_ADDRESS | IP | PORT | SSL_PORT | CLUSTER')\n"
+            "domainRuntime()\n"
+            "runtime_map = {{}}\n"
+            "for r in domainRuntimeService.getServerRuntimes():\n"
+            "    runtime_map[r.getName()] = r.getState()\n"
             "domainConfig()\n"
-            "admin_server = cmo.getAdminServerName()\n"
-            "print('TYPE | SERVER | MACHINE | LISTEN_ADDRESS | IP | PORT | SSL_PORT | CLUSTER')\n"
             "for server in cmo.getServers():\n"
+            "    name = server.getName()\n"
             "    machine = server.getMachine().getName() if server.getMachine() else 'None'\n"
             "    listen_address = server.getListenAddress() or '0.0.0.0'\n"
             "    port = str(server.getListenPort())\n"
@@ -1028,7 +1046,8 @@ def get_weblogic_metrics(target, environment):
             "    if ssl:\n"
             "        ssl_port = str(ssl.getListenPort())\n"
             "    cluster = server.getCluster().getName() if server.getCluster() else 'None'\n"
-            "    server_type = 'ADMIN' if server.getName() == admin_server else 'MANAGED'\n"
+            "    state = runtime_map.get(name, 'UNKNOWN')\n"
+            "    server_type = 'ADMIN' if name == 'AdminServer' else 'MANAGED'\n"
             "    ip_value = 'None'\n"
             "    try:\n"
             "        resolver = listen_address\n"
@@ -1038,7 +1057,7 @@ def get_weblogic_metrics(target, environment):
             "            ip_value = InetAddress.getByName(resolver).getHostAddress()\n"
             "    except:\n"
             "        pass\n"
-            "    print(server_type + ' | ' + server.getName() + ' | ' + machine + ' | ' + listen_address + ' | ' + ip_value + ' | ' + port + ' | ' + ssl_port + ' | ' + cluster)\n"
+            "    print(server_type + ' | ' + name + ' | ' + state + ' | ' + machine + ' | ' + listen_address + ' | ' + ip_value + ' | ' + port + ' | ' + ssl_port + ' | ' + cluster)\n"
             "exit()\n"
         ).format(
             python_string_literal(admin_username),

@@ -406,6 +406,8 @@ def normalize_environment(payload, existing=None):
         weblogic_payload.get("enabled"),
         existing_weblogic.get("enabled", products.get("weblogic")),
     )
+    if environment_type == "oud":
+        products["weblogic"] = bool(weblogic_enabled)
 
     environment = {
         "id": str(payload.get("id") or existing.get("id") or base.get("id")).strip() or base.get("id"),
