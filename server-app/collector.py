@@ -996,7 +996,6 @@ def get_weblogic_metrics(target, environment):
 
     target = build_weblogic_target(environment, target)
     settings = environment.get("weblogic") or {}
-    configured_server_names = settings.get("serverNames") or []
     jstat_path = settings.get("jstatPath")
     admin_url = str(settings.get("adminUrl") or "").strip()
     admin_username = str(settings.get("adminUsername") or "").strip()
@@ -1009,8 +1008,10 @@ def get_weblogic_metrics(target, environment):
     deployment_command = ""
     deployment_error = None
     deployments = []
+    configuration_error = None
+    weblogic_ready = bool(oracle_home and admin_username and admin_password and deployment_connect_url)
 
-    if oracle_home and admin_username and admin_password and deployment_connect_url:
+    if weblogic_ready:
         wlst_path = "{0}/oracle_common/common/bin/wlst.sh".format(oracle_home.rstrip("/"))
         inventory_script = (
             "from java.net import InetAddress\n"
@@ -1082,43 +1083,45 @@ def get_weblogic_metrics(target, environment):
             missing_text = "Missing WebLogic deployment settings: {0}.".format(", ".join(missing))
             server_inventory_error = missing_text
             deployment_error = missing_text
+            configuration_error = missing_text
 
-    server_names = [item.get("name") for item in server_inventory if item.get("name")] or configured_server_names
-    process_patterns = ["Dweblogic.Name={0}".format(name) for name in server_names] if server_names else ["Dweblogic.Name="]
-
-    process_result = run_target(
-        target,
-        "ps -eo pid=,nlwp=,rss=,args= | egrep {0} | grep -v grep".format(shlex.quote("|".join(process_patterns))),
-    )
+    server_names = [item.get("name") for item in server_inventory if item.get("name")]
+    process_patterns = ["Dweblogic.Name={0}".format(name) for name in server_names] if server_names else []
 
     servers = []
-    for process_line in lines(process_result.get("output")):
-        match = re.match(r"^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.*)$", process_line)
-        if not match:
-            continue
+    if process_patterns:
+        process_result = run_target(
+            target,
+            "ps -eo pid=,nlwp=,rss=,args= | egrep {0} | grep -v grep".format(shlex.quote("|".join(process_patterns))),
+        )
 
-        pid = int(match.group(1))
-        threads = int(match.group(2))
-        rss_kb = int(match.group(3))
-        arguments = match.group(4)
-        name_match = re.search(r"-Dweblogic.Name=([^\s]+)", arguments)
-        server_name = name_match.group(1) if name_match else "Unknown"
+        for process_line in lines(process_result.get("output")):
+            match = re.match(r"^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.*)$", process_line)
+            if not match:
+                continue
 
-        heap = None
-        if jstat_path:
-            jstat_result = run_target(target, "{0} -gcutil {1} 2>/dev/null".format(shlex.quote(jstat_path), pid))
-            if jstat_result.get("exit_code") == 0:
-                heap = parse_jstat(jstat_result.get("output"))
+            pid = int(match.group(1))
+            threads = int(match.group(2))
+            rss_kb = int(match.group(3))
+            arguments = match.group(4)
+            name_match = re.search(r"-Dweblogic.Name=([^\s]+)", arguments)
+            server_name = name_match.group(1) if name_match else "Unknown"
 
-        servers.append({
-            "name": server_name,
-            "pid": pid,
-            "threads": threads,
-            "rssMb": round(rss_kb / 1024.0, 1),
-            "xmxMb": extract_xmx_mb(arguments),
-            "heap": heap,
-            "status": "running",
-        })
+            heap = None
+            if jstat_path:
+                jstat_result = run_target(target, "{0} -gcutil {1} 2>/dev/null".format(shlex.quote(jstat_path), pid))
+                if jstat_result.get("exit_code") == 0:
+                    heap = parse_jstat(jstat_result.get("output"))
+
+            servers.append({
+                "name": server_name,
+                "pid": pid,
+                "threads": threads,
+                "rssMb": round(rss_kb / 1024.0, 1),
+                "xmxMb": extract_xmx_mb(arguments),
+                "heap": heap,
+                "status": "running",
+            })
 
     order_map = dict((name, index) for index, name in enumerate(server_names))
     servers.sort(key=lambda item: order_map.get(item.get("name"), 999))
@@ -1129,6 +1132,7 @@ def get_weblogic_metrics(target, environment):
     inactive_deployments = [item for item in deployments if item.get("state") != "STATE_ACTIVE"]
 
     return {
+        "error": configuration_error,
         "expectedServers": server_names,
         "runningServers": len(servers),
         "missingServers": missing_servers,
