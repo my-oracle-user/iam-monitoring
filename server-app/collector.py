@@ -1045,6 +1045,39 @@ def parse_weblogic_server_inventory(text):
     return rows
 
 
+def parse_weblogic_stuck_threads(text):
+    rows = []
+    header_seen = False
+
+    def maybe_int(value):
+        text_value = str(value or "").strip()
+        if re.fullmatch(r"-?\d+", text_value):
+            return int(text_value)
+        return None
+
+    for raw_line in lines(text):
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("SERVER | STUCK_THREADS | HOGGING_THREADS"):
+            header_seen = True
+            continue
+        if not header_seen or "|" not in stripped:
+            continue
+        parts = [part.strip() for part in stripped.split("|")]
+        if len(parts) < 3:
+            continue
+        stuck_threads = maybe_int(parts[1])
+        hogging_threads = maybe_int(parts[2])
+        rows.append({
+            "server": parts[0],
+            "stuckThreads": stuck_threads,
+            "hoggingThreads": hogging_threads,
+            "error": "" if stuck_threads is not None and hogging_threads is not None else "Unable to fetch thread info",
+        })
+    return rows
+
+
 def run_wlst_script(target, wlst_path, script_body, timeout=180):
     command = (
         "scriptfile=$(mktemp /tmp/iam-monitoring-wlst.XXXXXX.py) && "
@@ -1092,6 +1125,9 @@ def get_weblogic_metrics(target, environment, progress=None):
     deployment_command = ""
     deployment_error = None
     deployments = []
+    stuck_thread_command = ""
+    stuck_thread_error = None
+    stuck_threads = []
     configuration_error = None
     weblogic_ready = bool(oracle_home and admin_username and admin_password and deployment_connect_url)
 
@@ -1174,6 +1210,38 @@ def get_weblogic_metrics(target, environment, progress=None):
             deployment_error = deployment_output or "WLST deployment status command failed."
             if callable(progress):
                 progress("WLST deployment-state returned no parsed rows.")
+
+        if callable(progress):
+            progress("Starting WLST stuck-thread collection from ORACLE_HOME/oracle_common/common/bin/wlst.sh.")
+        stuck_thread_script = (
+            "connect('{0}','{1}','{2}')\n"
+            "domainRuntime()\n"
+            "print('SERVER | STUCK_THREADS | HOGGING_THREADS')\n"
+            "for runtime in domainRuntimeService.getServerRuntimes():\n"
+            "    name = runtime.getName()\n"
+            "    try:\n"
+            "        pool = runtime.getThreadPoolRuntime()\n"
+            "        stuck = pool.getStuckThreadCount() if pool else 0\n"
+            "        hogging = pool.getHoggingThreadCount() if pool else 0\n"
+            "        print(name + ' | ' + str(stuck) + ' | ' + str(hogging))\n"
+            "    except:\n"
+            "        print(name + ' | ERROR | ERROR')\n"
+            "exit()\n"
+        ).format(
+            python_string_literal(admin_username),
+            python_string_literal(admin_password),
+            python_string_literal(deployment_connect_url),
+        )
+        stuck_thread_command, stuck_thread_result = run_wlst_script(target, wlst_path, stuck_thread_script)
+        stuck_threads = parse_weblogic_stuck_threads(stuck_thread_result.get("output"))
+        stuck_thread_output = str(stuck_thread_result.get("output") or "").strip()
+        if stuck_threads:
+            if callable(progress):
+                progress("WLST stuck-thread collection returned {0} server row(s).".format(len(stuck_threads)))
+        else:
+            stuck_thread_error = stuck_thread_output or "WLST stuck-thread command failed."
+            if callable(progress):
+                progress("WLST stuck-thread collection returned no parsed rows.")
     else:
         missing = []
         if not oracle_home:
@@ -1188,6 +1256,7 @@ def get_weblogic_metrics(target, environment, progress=None):
             missing_text = "Missing WebLogic deployment settings: {0}.".format(", ".join(missing))
             server_inventory_error = missing_text
             deployment_error = missing_text
+            stuck_thread_error = missing_text
             configuration_error = missing_text
 
     server_names = [item.get("name") for item in server_inventory if item.get("name")]
@@ -1235,6 +1304,10 @@ def get_weblogic_metrics(target, environment, progress=None):
     missing_servers = [name for name in server_names if name not in found_names]
     active_deployments = [item for item in deployments if item.get("state") == "STATE_ACTIVE"]
     inactive_deployments = [item for item in deployments if item.get("state") != "STATE_ACTIVE"]
+    total_stuck_threads = sum(item.get("stuckThreads") or 0 for item in stuck_threads)
+    total_hogging_threads = sum(item.get("hoggingThreads") or 0 for item in stuck_threads)
+    servers_with_stuck_threads = [item.get("server") for item in stuck_threads if (item.get("stuckThreads") or 0) > 0]
+    servers_with_hogging_threads = [item.get("server") for item in stuck_threads if (item.get("hoggingThreads") or 0) > 0]
 
     return {
         "error": configuration_error,
@@ -1253,6 +1326,13 @@ def get_weblogic_metrics(target, environment, progress=None):
         "deploymentCount": len(deployments),
         "activeDeploymentCount": len(active_deployments),
         "inactiveDeploymentCount": len(inactive_deployments),
+        "stuckThreads": stuck_threads,
+        "stuckThreadCommand": "{0}/oracle_common/common/bin/wlst.sh".format(oracle_home.rstrip("/")) if oracle_home else "",
+        "stuckThreadError": stuck_thread_error,
+        "stuckThreadCount": total_stuck_threads,
+        "hoggingThreadCount": total_hogging_threads,
+        "serversWithStuckThreads": servers_with_stuck_threads,
+        "serversWithHoggingThreads": servers_with_hogging_threads,
     }
 
 
