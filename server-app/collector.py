@@ -1078,6 +1078,41 @@ def parse_weblogic_stuck_threads(text):
     return rows
 
 
+def parse_weblogic_jdbc_pools(text):
+    rows = []
+    header_seen = False
+
+    def maybe_int(value):
+        text_value = str(value or "").strip()
+        if re.fullmatch(r"-?\d+", text_value):
+            return int(text_value)
+        return None
+
+    for raw_line in lines(text):
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("SERVER | DATASOURCE | ACTIVE | WAITING"):
+            header_seen = True
+            continue
+        if not header_seen or "|" not in stripped:
+            continue
+        parts = [part.strip() for part in stripped.split("|")]
+        if len(parts) < 4:
+            continue
+        active_connections = maybe_int(parts[2])
+        waiting_connections = maybe_int(parts[3])
+        if active_connections is None or waiting_connections is None:
+            continue
+        rows.append({
+            "server": parts[0],
+            "dataSource": parts[1],
+            "activeConnections": active_connections,
+            "waitingConnections": waiting_connections,
+        })
+    return rows
+
+
 def run_wlst_script(target, wlst_path, script_body, timeout=180):
     command = (
         "scriptfile=$(mktemp /tmp/iam-monitoring-wlst.XXXXXX.py) && "
@@ -1128,6 +1163,9 @@ def get_weblogic_metrics(target, environment, progress=None):
     stuck_thread_command = ""
     stuck_thread_error = None
     stuck_threads = []
+    jdbc_pool_command = ""
+    jdbc_pool_error = None
+    jdbc_pools = []
     configuration_error = None
     weblogic_ready = bool(oracle_home and admin_username and admin_password and deployment_connect_url)
 
@@ -1242,6 +1280,38 @@ def get_weblogic_metrics(target, environment, progress=None):
             stuck_thread_error = stuck_thread_output or "WLST stuck-thread command failed."
             if callable(progress):
                 progress("WLST stuck-thread collection returned no parsed rows.")
+
+        if callable(progress):
+            progress("Starting WLST JDBC connection pool collection from ORACLE_HOME/oracle_common/common/bin/wlst.sh.")
+        jdbc_pool_script = (
+            "connect('{0}','{1}','{2}')\n"
+            "domainRuntime()\n"
+            "print('SERVER | DATASOURCE | ACTIVE | WAITING')\n"
+            "for runtime in domainRuntimeService.getServerRuntimes():\n"
+            "    server_name = runtime.getName()\n"
+            "    try:\n"
+            "        jdbc_service = runtime.getJDBCServiceRuntime()\n"
+            "        data_sources = jdbc_service.getJDBCDataSourceRuntimeMBeans() if jdbc_service else []\n"
+            "        for data_source in data_sources:\n"
+            "            print(server_name + ' | ' + data_source.getName() + ' | ' + str(data_source.getActiveConnectionsCurrentCount()) + ' | ' + str(data_source.getWaitingForConnectionCurrentCount()))\n"
+            "    except:\n"
+            "        pass\n"
+            "exit()\n"
+        ).format(
+            python_string_literal(admin_username),
+            python_string_literal(admin_password),
+            python_string_literal(deployment_connect_url),
+        )
+        jdbc_pool_command, jdbc_pool_result = run_wlst_script(target, wlst_path, jdbc_pool_script)
+        jdbc_pools = parse_weblogic_jdbc_pools(jdbc_pool_result.get("output"))
+        jdbc_pool_output = str(jdbc_pool_result.get("output") or "").strip()
+        if jdbc_pools:
+            if callable(progress):
+                progress("WLST JDBC connection pool collection returned {0} data source row(s).".format(len(jdbc_pools)))
+        else:
+            jdbc_pool_error = jdbc_pool_output or "WLST JDBC connection pool command failed."
+            if callable(progress):
+                progress("WLST JDBC connection pool collection returned no parsed rows.")
     else:
         missing = []
         if not oracle_home:
@@ -1257,6 +1327,7 @@ def get_weblogic_metrics(target, environment, progress=None):
             server_inventory_error = missing_text
             deployment_error = missing_text
             stuck_thread_error = missing_text
+            jdbc_pool_error = missing_text
             configuration_error = missing_text
 
     server_names = [item.get("name") for item in server_inventory if item.get("name")]
@@ -1308,6 +1379,8 @@ def get_weblogic_metrics(target, environment, progress=None):
     total_hogging_threads = sum(item.get("hoggingThreads") or 0 for item in stuck_threads)
     servers_with_stuck_threads = [item.get("server") for item in stuck_threads if (item.get("stuckThreads") or 0) > 0]
     servers_with_hogging_threads = [item.get("server") for item in stuck_threads if (item.get("hoggingThreads") or 0) > 0]
+    total_active_connections = sum(item.get("activeConnections") or 0 for item in jdbc_pools)
+    total_waiting_connections = sum(item.get("waitingConnections") or 0 for item in jdbc_pools)
 
     return {
         "error": configuration_error,
@@ -1333,6 +1406,12 @@ def get_weblogic_metrics(target, environment, progress=None):
         "hoggingThreadCount": total_hogging_threads,
         "serversWithStuckThreads": servers_with_stuck_threads,
         "serversWithHoggingThreads": servers_with_hogging_threads,
+        "jdbcPools": jdbc_pools,
+        "jdbcPoolCommand": "{0}/oracle_common/common/bin/wlst.sh".format(oracle_home.rstrip("/")) if oracle_home else "",
+        "jdbcPoolError": jdbc_pool_error,
+        "jdbcPoolCount": len(jdbc_pools),
+        "jdbcActiveConnectionCount": total_active_connections,
+        "jdbcWaitingConnectionCount": total_waiting_connections,
     }
 
 
