@@ -277,15 +277,24 @@ const weblogicUrlInput=form.elements.weblogicAdminUrl;
 const weblogicHostInput=form.elements.weblogicAdminHost;
 if(weblogicUrlInput&&weblogicHostInput){
 const derivedHost=extractHostFromUrl(weblogicUrlInput.value);
+const currentUrl=String(weblogicUrlInput.value||"").trim();
 const currentHost=String(weblogicHostInput.value||"").trim();
 const lastDerivedHost=String(weblogicHostInput.dataset.derivedHost||"").trim();
 const currentLooksLikeProtocol=/^(?:https?|t3s?|ftp|ssh)$/i.test(currentHost);
 if(derivedHost){
 if(!currentHost||currentHost===lastDerivedHost||currentLooksLikeProtocol)weblogicHostInput.value=derivedHost;
 weblogicHostInput.dataset.derivedHost=derivedHost;
+}else if(currentLooksLikeProtocol){
+weblogicHostInput.value="";
+weblogicHostInput.dataset.derivedHost="";
 }else if(!String(weblogicUrlInput.value||"").trim()){
 if(!currentHost||currentHost===lastDerivedHost||currentLooksLikeProtocol)weblogicHostInput.value="";
 weblogicHostInput.dataset.derivedHost="";
+}else if(/^[a-z][a-z0-9+.-]*:\/\//i.test(currentUrl)&&!extractHostFromUrl(currentUrl)){
+if(currentLooksLikeProtocol||currentHost===lastDerivedHost){
+weblogicHostInput.value="";
+weblogicHostInput.dataset.derivedHost="";
+}
 }
 }
 const scheduleInput=form.elements.collectionScheduleMinutes;
