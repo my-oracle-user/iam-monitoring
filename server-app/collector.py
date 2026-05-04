@@ -1059,6 +1059,20 @@ def parse_weblogic_stuck_threads(text):
         stripped = raw_line.strip()
         if not stripped:
             continue
+        arrow_match = re.match(
+            r"^(?P<server>.+?)\s*->\s*StuckThreads:\s*(?P<stuck>[^|]+)\|\s*HoggingThreads:\s*(?P<hogging>.+?)$",
+            stripped,
+        )
+        if arrow_match:
+            stuck_threads = maybe_int(arrow_match.group("stuck"))
+            hogging_threads = maybe_int(arrow_match.group("hogging"))
+            rows.append({
+                "server": arrow_match.group("server").strip(),
+                "stuckThreads": stuck_threads,
+                "hoggingThreads": hogging_threads,
+                "error": "" if stuck_threads is not None and hogging_threads is not None else "Unable to fetch thread info",
+            })
+            continue
         if stripped.startswith("SERVER | STUCK_THREADS | HOGGING_THREADS"):
             header_seen = True
             continue
@@ -1255,15 +1269,16 @@ def get_weblogic_metrics(target, environment, progress=None):
             "connect('{0}','{1}','{2}')\n"
             "domainRuntime()\n"
             "print('SERVER | STUCK_THREADS | HOGGING_THREADS')\n"
-            "for runtime in domainRuntimeService.getServerRuntimes():\n"
-            "    name = runtime.getName()\n"
+            "cd('/ServerRuntimes')\n"
+            "for name in ls(returnMap='true'):\n"
             "    try:\n"
-            "        pool = runtime.getThreadPoolRuntime()\n"
-            "        stuck = pool.getStuckThreadCount() if pool else 0\n"
-            "        hogging = pool.getHoggingThreadCount() if pool else 0\n"
+            "        cd('/ServerRuntimes/' + name + '/ThreadPoolRuntime/ThreadPoolRuntime')\n"
+            "        stuck = cmo.getStuckThreadCount()\n"
+            "        hogging = cmo.getHoggingThreadCount()\n"
             "        print(name + ' | ' + str(stuck) + ' | ' + str(hogging))\n"
             "    except:\n"
             "        print(name + ' | ERROR | ERROR')\n"
+            "    cd('/ServerRuntimes')\n"
             "exit()\n"
         ).format(
             python_string_literal(admin_username),
