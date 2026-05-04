@@ -1,201 +1,131 @@
 # Oracle Identity & Access Management Dashboard Server
 
-This directory contains the hosted IAM dashboard server, its administration API, and
-the install and upgrade utilities used to deploy it as a Linux systemd service.
+This directory contains the IAM monitoring dashboard server, administration API, Linux installer, scheduler, and upgrade utilities.
 
 ## Quick Install
 
-From the Linux host, download the current GitHub source bundle, extract it, and run the installer:
+Use the normal install command on a new server. It installs/checks the required OS packages, prompts for the dashboard port, and defaults to `8081`.
+
+### Install Without Proxy
 
 ```bash
-cd /tmp
-curl -L https://github.com/my-oracle-user/iam-monitoring/archive/refs/heads/main.tar.gz -o iam-monitoring-main.tar.gz
-tar -xzf iam-monitoring-main.tar.gz
-cd iam-monitoring-main/server-app
-sudo bash ./install.sh
+sudo bash -lc 'cd /tmp && rm -rf iam-monitoring-main iam-monitoring-main.tar.gz && curl -L https://github.com/my-oracle-user/iam-monitoring/archive/refs/heads/main.tar.gz -o iam-monitoring-main.tar.gz && tar -xzf iam-monitoring-main.tar.gz && bash /tmp/iam-monitoring-main/server-app/install.sh'
 ```
 
-The installer prompts for the service port and defaults to `8081`.
-It also prompts for the default collector interval and defaults to `60` minutes.
-
-If the required OS packages are already installed and you want to avoid a slow `dnf`/`yum`
-repository refresh, pass `--skip-os-packages`:
+### Install With Proxy
 
 ```bash
-sudo bash ./install.sh --skip-os-packages
+sudo bash -lc 'export http_proxy=http://www-proxy-phx.oraclecorp.com:80; export https_proxy=http://www-proxy-phx.oraclecorp.com:80; cd /tmp && rm -rf iam-monitoring-main iam-monitoring-main.tar.gz && curl -L https://github.com/my-oracle-user/iam-monitoring/archive/refs/heads/main.tar.gz -o iam-monitoring-main.tar.gz && tar -xzf iam-monitoring-main.tar.gz && bash /tmp/iam-monitoring-main/server-app/install.sh'
 ```
 
-If the server needs an outbound proxy for GitHub update checks, add these to `/etc/iam-monitoring.env`
-after install and then restart `iam-monitoring`:
+### Prepared Reinstall Only
+
+Use this only when Python, SSH tools, `sshpass`, `tar`, `unzip`, and `cronie` are already installed and you want to avoid a slow `dnf`/`yum` repository refresh.
+
+```bash
+sudo bash -lc 'export http_proxy=http://www-proxy-phx.oraclecorp.com:80; export https_proxy=http://www-proxy-phx.oraclecorp.com:80; cd /tmp && rm -rf iam-monitoring-main iam-monitoring-main.tar.gz && curl -L https://github.com/my-oracle-user/iam-monitoring/archive/refs/heads/main.tar.gz -o iam-monitoring-main.tar.gz && tar -xzf iam-monitoring-main.tar.gz && bash /tmp/iam-monitoring-main/server-app/install.sh --skip-os-packages'
+```
+
+## Quick Upgrade
+
+Upgrade can be done from the UI or from the Linux command line. The UI upgrade is easier once the dashboard is already running.
+
+### Upgrade Through UI
+
+Open:
+
+```text
+Administration -> Help -> GitHub Upgrade
+```
+
+If the server needs a proxy for GitHub checks or GitHub upgrade downloads, set it in:
+
+```text
+Administration -> Help -> GitHub Update Proxy
+```
+
+The UI checks the GitHub `VERSION` first. If the running version is already current, it says you are on the latest version and does not restart the service.
+
+### Upgrade Command Without Proxy
+
+```bash
+sudo bash -lc 'cd /tmp && rm -rf iam-monitoring-main iam-monitoring-main.tar.gz && curl -L https://github.com/my-oracle-user/iam-monitoring/archive/refs/heads/main.tar.gz -o iam-monitoring-main.tar.gz && tar -xzf iam-monitoring-main.tar.gz && bash /tmp/iam-monitoring-main/server-app/upgrade.sh'
+```
+
+### Upgrade Command With Proxy
+
+```bash
+sudo bash -lc 'export http_proxy=http://www-proxy-phx.oraclecorp.com:80; export https_proxy=http://www-proxy-phx.oraclecorp.com:80; cd /tmp && rm -rf iam-monitoring-main iam-monitoring-main.tar.gz && curl -L https://github.com/my-oracle-user/iam-monitoring/archive/refs/heads/main.tar.gz -o iam-monitoring-main.tar.gz && tar -xzf iam-monitoring-main.tar.gz && bash /tmp/iam-monitoring-main/server-app/upgrade.sh'
+```
+
+The upgrade keeps `/etc/iam-monitoring.env`, saved environments, runtime state, snapshots, and logs in place.
+
+## After Install
+
+The installer prints the dashboard URL at the end:
+
+```text
+http://<server-ip>:8081/
+```
+
+Useful checks:
+
+```bash
+sudo systemctl status iam-monitoring --no-pager
+sudo systemctl status iam-monitoring-upgrader --no-pager
+curl http://127.0.0.1:8081/healthz
+sudo journalctl -u iam-monitoring -n 100 --no-pager
+sudo tail -F /var/log/iam-monitoring/scheduler.log
+```
+
+## Runtime Layout
+
+- Install directory: `/opt/iam-monitoring`
+- Runtime env file: `/etc/iam-monitoring.env`
+- State directory: `/var/lib/iam-monitoring/state`
+- SQLite registry: `/var/lib/iam-monitoring/state/iam-monitoring.sqlite`
+- Snapshot directory: `/var/lib/iam-monitoring/state/snapshots`
+- Runtime env directory: `/var/lib/iam-monitoring/state/runtime_env`
+- Log directory: `/var/log/iam-monitoring`
+- Service name: `iam-monitoring`
+- Upgrade helper service: `iam-monitoring-upgrader`
+- Cron file: `/etc/cron.d/iam-monitoring`
+
+## GitHub Proxy Options
+
+The easiest place to manage GitHub proxy settings is:
+
+```text
+Administration -> Help -> GitHub Update Proxy
+```
+
+You can also put service-level proxy settings in `/etc/iam-monitoring.env` and restart the service:
 
 ```bash
 IAM_MONITORING_HTTP_PROXY=http://www-proxy-phx.oraclecorp.com:80
 IAM_MONITORING_HTTPS_PROXY=http://www-proxy-phx.oraclecorp.com:80
 IAM_MONITORING_NO_PROXY=127.0.0.1,localhost
-```
-
-You can also save update-check proxy details from `Administration -> Help -> GitHub Update Proxy`.
-Those UI-saved values take effect immediately for the dashboard's `Check For Updates` action.
-That same Help page can also queue a GitHub-based in-place upgrade.
-
-## Quick Upgrade
-
-From the Linux host, download the latest GitHub source bundle, extract it, and run the bundle's own upgrader:
-
-```bash
-sudo bash -lc 'cd /tmp && rm -rf iam-monitoring-main && curl -L https://github.com/my-oracle-user/iam-monitoring/archive/refs/heads/main.tar.gz -o iam-monitoring-main.tar.gz && tar -xzf iam-monitoring-main.tar.gz && bash /tmp/iam-monitoring-main/server-app/upgrade.sh'
-```
-
-That keeps the existing runtime env file, state directory, and saved environments in place.
-
-If you only need the upgrade download itself to use a proxy, your current pattern also works:
-
-```bash
-sudo bash -lc '
-export http_proxy=http://www-proxy-phx.oraclecorp.com:80
-export https_proxy=http://www-proxy-phx.oraclecorp.com:80
-curl -L https://github.com/my-oracle-user/iam-monitoring/archive/refs/heads/main.tar.gz -o /tmp/iam-monitoring-main.tar.gz && \
-rm -rf /tmp/iam-monitoring-main && \
-tar -xzf /tmp/iam-monitoring-main.tar.gz -C /tmp && \
-bash /tmp/iam-monitoring-main/server-app/upgrade.sh
-'
-```
-
-For the dashboard service's own `Check For Updates` button, put the proxy settings in `/etc/iam-monitoring.env`
-and restart the service.
-
-Or save them from `Administration -> Help -> GitHub Update Proxy` if you want that GitHub check to work
-without editing the Linux env file directly.
-
-## UI GitHub Upgrade
-
-`Administration -> Help` can now queue a GitHub-based in-place upgrade.
-
-- It is enabled by default from the Help page in this build.
-- It checks the GitHub `VERSION` first and says you are already on the latest version when no upgrade is needed.
-- It downloads the configured GitHub branch as a bundle.
-- It runs the downloaded bundle's own `upgrade.sh` through a root-owned helper service.
-- The dashboard will be temporarily unavailable while `iam-monitoring` restarts.
-- The Help page shows queued/running/completed/failed status and the latest upgrade log tail.
-
-The helper service installed for this is:
-
-- `iam-monitoring-upgrader`
-
-Useful checks:
-
-- `sudo systemctl status iam-monitoring-upgrader --no-pager`
-- `sudo journalctl -u iam-monitoring-upgrader -n 100 --no-pager`
-
-## What is here
-
-- `app.py`: HTTP server and environment administration API
-- `collect_environment.py`: collector entry point used by manual jobs and the scheduler
-- `collector.py`: SSH-based server and product metric collection
-- `config_store.py`: default configuration and environment normalization
-- `environment_registry.py`: SQLite-backed environment registry
-- `job_runner.py`: bootstrap, runtime env files, snapshot persistence, and collector job state
-- `scheduler_jobs.sh`: host scheduler entry point for due environment collectors
-- `static/`: dashboard UI assets
-- `deploy/oracledash.service`: systemd service template
-- `deploy/crontab.iam-monitoring`: cron template for the host scheduler
-- `install.sh`: wrapper entry point
-- `install_oracledash.sh`: bundle-aware installer
-- `upgrade.sh`: bundle-aware upgrade utility with backup creation
-
-## Install
-
-From a Linux staging folder that contains this directory's files:
-
-```bash
-sudo bash ./install.sh
-```
-
-If you do not pass `--port`, the installer prompts for the service port and defaults to `8081`.
-The installer also prompts for the default per-environment collector interval and defaults to `60` minutes.
-
-You can also install directly from an archive:
-
-```bash
-sudo bash ./install.sh --archive /tmp/iam-monitoring.tar.gz
-sudo bash ./install.sh --archive /tmp/iam-monitoring.zip
-```
-
-Use `--skip-os-packages` when Python, SSH tools, `sshpass`, `tar`, `unzip`, and `cronie`
-are already present on the host.
-
-Default runtime paths:
-
-- install directory: `/opt/iam-monitoring`
-- runtime env file: `/etc/iam-monitoring.env`
-- state directory: `/var/lib/iam-monitoring/state`
-- log directory: `/var/log/iam-monitoring`
-- service name: `iam-monitoring`
-- service port: `8081`
-- host cron file: `/etc/cron.d/iam-monitoring`
-- per-environment runtime env files: `/var/lib/iam-monitoring/state/runtime_env`
-- environment snapshots: `/var/lib/iam-monitoring/state/snapshots`
-
-Fresh installs start with an empty environment registry.
-Runtime service settings come from `/etc/iam-monitoring.env`.
-Saved IAM environments are stored in the SQLite registry under `/var/lib/iam-monitoring/state`.
-The host scheduler wakes every 5 minutes and only runs an environment when that environment's saved interval is due.
-
-Optional proxy settings for the dashboard service:
-
-- `IAM_MONITORING_HTTP_PROXY=http://proxy.example.com:80`
-- `IAM_MONITORING_HTTPS_PROXY=http://proxy.example.com:80`
-- `IAM_MONITORING_NO_PROXY=127.0.0.1,localhost`
-
-After changing `/etc/iam-monitoring.env`, restart the service:
-
-```bash
 sudo systemctl restart iam-monitoring
 ```
 
-The Help page can also store proxy settings inside the dashboard registry for `Check For Updates`.
-That UI path applies immediately and is useful when admins should not edit `/etc/iam-monitoring.env`
-just to make the GitHub version check work.
-
-Post-install checks:
-
-- service status: `sudo systemctl status iam-monitoring --no-pager`
-- health check: `curl http://127.0.0.1:8081/healthz`
-- response headers: `curl -I http://127.0.0.1:8081/healthz`
-- service logs: `sudo journalctl -u iam-monitoring -n 100 --no-pager`
-- scheduler log: `sudo tail -F /var/log/iam-monitoring/scheduler.log`
-
-## Environment lifecycle
+## Environment Lifecycle
 
 - Add environments from `Administration -> Environments`.
-- Use `Administration -> Help` for version, runtime layout, health checks, and service commands.
 - Use `Save And Bootstrap` when adding an environment.
-- Bootstrap uses the saved initial SSH user and password, or the saved initial private key, one time.
-- After bootstrap, the dashboard switches that environment to its installed runtime key for ongoing `Run Jobs Now` and scheduled collection.
-- `Run Jobs Now` is available on each environment under `Operations`.
+- Bootstrap uses the initial SSH user/password or private key once.
+- After bootstrap, collection uses the installed runtime SSH key.
+- Use `Run Jobs Now` inside an environment to collect immediately.
+- Scheduled collection runs through `/etc/cron.d/iam-monitoring`.
 
-## Upgrade
+## Files
 
-Run an in-place upgrade from a newer bundle:
-
-```bash
-sudo bash ./upgrade.sh
-```
-
-Or upgrade from an archive:
-
-```bash
-sudo bash ./upgrade.sh --archive /tmp/iam-monitoring.tar.gz
-```
-
-The upgrade utility:
-
-- creates a backup under `/opt/iam-monitoring-backup`
-- preserves the runtime environment file and state directory
-- stages the new application bundle into the install directory
-- refreshes the Python virtual environment
-- validates the Python modules
-- updates the systemd service file
-- refreshes the host cron scheduler entry
-
-After install, use the dashboard `Administration` page to add one or more IAM environments.
+- `app.py`: HTTP server and administration API
+- `collect_environment.py`: collector entry point used by manual jobs and scheduler runs
+- `collector.py`: SSH, Linux, OUD, and WebLogic collection
+- `config_store.py`: configuration normalization
+- `environment_registry.py`: SQLite-backed environment registry
+- `job_runner.py`: bootstrap, runtime env files, snapshots, and collector job state
+- `scheduler_jobs.sh`: scheduler entry point
+- `install.sh`: installer wrapper
+- `install_oracledash.sh`: bundle-aware installer
+- `upgrade.sh`: bundle-aware upgrade utility
