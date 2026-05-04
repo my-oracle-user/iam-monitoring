@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import sys
+import threading
 import time
 
 from environment_registry import get_environment
@@ -12,6 +13,12 @@ from job_runner import (
     collect_environment_now,
     run_due_collection_jobs,
 )
+
+
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except Exception:
+    pass
 
 
 def mark_job_finished(db_path, environment_id, trigger, exit_code):
@@ -52,9 +59,30 @@ def _log_line(db_path, environment_id, message):
 
 def _progress_logger(db_path, environment_id):
     def _log(message):
-        print(_log_line(db_path, environment_id, message))
+        print(_log_line(db_path, environment_id, message), flush=True)
 
     return _log
+
+
+def _start_heartbeat(db_path, environment_id, interval_seconds=15):
+    stop_event = threading.Event()
+    started = time.time()
+
+    def _run():
+        while not stop_event.wait(interval_seconds):
+            elapsed = int(time.time() - started)
+            print(
+                _log_line(
+                    db_path,
+                    environment_id,
+                    "Collector still running; waiting for the current command to finish ({0}s elapsed).".format(elapsed),
+                ),
+                flush=True,
+            )
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    return stop_event, thread
 
 
 def main():
@@ -67,19 +95,20 @@ def main():
 
     if args.scheduler:
         launched = run_due_collection_jobs(args.db_path)
-        print("Scheduler launched {0} collector job(s).".format(len(launched)))
+        print("Scheduler launched {0} collector job(s).".format(len(launched)), flush=True)
         for item in launched:
             label = "started" if item.get("started") else "already running"
             if item.get("error"):
                 label = "error: {0}".format(item.get("error"))
-            print("  - {0} ({1}): {2}".format(item.get("environmentName") or item.get("environmentId"), item.get("environmentId"), label))
+            print("  - {0} ({1}): {2}".format(item.get("environmentName") or item.get("environmentId"), item.get("environmentId"), label), flush=True)
         return 0
 
     if not args.env_id:
         raise ValueError("--env-id is required unless --scheduler is used.")
 
-    print(_log_line(args.db_path, args.env_id, "Starting environment collector."))
+    print(_log_line(args.db_path, args.env_id, "Starting environment collector."), flush=True)
     exit_code = 0
+    heartbeat_stop, heartbeat_thread = _start_heartbeat(args.db_path, args.env_id)
     try:
         dashboard = collect_environment_now(
             args.db_path,
@@ -92,12 +121,16 @@ def main():
                 args.db_path,
                 args.env_id,
                 "Collector finished with status {0}.".format(dashboard.get("status") or "unknown"),
-            )
+            ),
+            flush=True,
         )
     except Exception as exc:
         exit_code = 1
-        print(_log_line(args.db_path, args.env_id, "Collector failed: {0}".format(exc)))
-    mark_job_finished(args.db_path, args.env_id, args.trigger, exit_code)
+        print(_log_line(args.db_path, args.env_id, "Collector failed: {0}".format(exc)), flush=True)
+    finally:
+        heartbeat_stop.set()
+        heartbeat_thread.join(timeout=1)
+        mark_job_finished(args.db_path, args.env_id, args.trigger, exit_code)
     return exit_code
 
 

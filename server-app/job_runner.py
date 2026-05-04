@@ -635,7 +635,7 @@ def launch_collection_job(db_path, environment_id, trigger="manual"):
 
     script_path = os.path.join(APP_ROOT, "collect_environment.py")
     wrapper = (
-        "{python} {script} --db-path {db_path} --env-id {environment_id} --trigger {trigger} >> {log_path} 2>&1"
+        "{python} -u {script} --db-path {db_path} --env-id {environment_id} --trigger {trigger} >> {log_path} 2>&1"
     ).format(
         python=shlex.quote(sys.executable),
         script=shlex.quote(script_path),
