@@ -20,7 +20,7 @@ function resolveReplicaNodeNames(metrics){const savedNames=coerceList((metrics||
 function formatValue(v,f){return v==null||v===""?(f||"-"):String(v);}
 function formatPercent(v){return v==null||v===""?"-":`${v}%`;}
 function formatMb(v){return v==null||v===""?"-":`${v} MB`;}
-function extractHostFromUrl(v){const text=String(v||"").trim();if(!text)return"";try{const normalized=/^[a-z][a-z0-9+.-]*:\/\//i.test(text)?text:`http://${text}`;return new URL(normalized).hostname||"";}catch(error){return"";}}
+function extractHostFromUrl(v){const text=String(v||"").trim();if(!text)return"";if(/^[a-z][a-z0-9+.-]*:?\/?\/?$/i.test(text))return"";try{const normalized=/^[a-z][a-z0-9+.-]*:\/\//i.test(text)?text:`placeholder://${text}`;const host=new URL(normalized).hostname||"";return/^(?:https?|t3s?|ftp|ssh|placeholder)$/i.test(host)?"":host;}catch(error){const stripped=text.replace(/^[a-z][a-z0-9+.-]*:\/\//i,"").replace(/^.*@/,"");const hostPort=(stripped.split(/[/?#]/,1)[0]||"").trim();const host=hostPort.replace(/^\[/,"").replace(/\](:\d+)?$/,"").split(":")[0].trim();return/^(?:https?|t3s?|ftp|ssh|placeholder)$/i.test(host)?"":host;}}
 function startCase(v){return String(v||"").replace(/[_-]+/g," ").replace(/\b\w/g,function(c){return c.toUpperCase();});}
 function normalizeEnvironmentType(v,f){const t=String(v||f||"").trim().toLowerCase();return["oam","oig","oid","oud"].includes(t)?t:(f||"");}
 function uppercaseType(v){const t=normalizeEnvironmentType(v,"");return t?t.toUpperCase():"Not Set";}
@@ -279,8 +279,14 @@ if(weblogicUrlInput&&weblogicHostInput){
 const derivedHost=extractHostFromUrl(weblogicUrlInput.value);
 const currentHost=String(weblogicHostInput.value||"").trim();
 const lastDerivedHost=String(weblogicHostInput.dataset.derivedHost||"").trim();
-if(derivedHost&&(!currentHost||currentHost===lastDerivedHost))weblogicHostInput.value=derivedHost;
+const currentLooksLikeProtocol=/^(?:https?|t3s?|ftp|ssh)$/i.test(currentHost);
+if(derivedHost){
+if(!currentHost||currentHost===lastDerivedHost||currentLooksLikeProtocol)weblogicHostInput.value=derivedHost;
 weblogicHostInput.dataset.derivedHost=derivedHost;
+}else if(!String(weblogicUrlInput.value||"").trim()){
+if(!currentHost||currentHost===lastDerivedHost||currentLooksLikeProtocol)weblogicHostInput.value="";
+weblogicHostInput.dataset.derivedHost="";
+}
 }
 const scheduleInput=form.elements.collectionScheduleMinutes;
 if(scheduleInput&&form.elements.collectionEnabled){scheduleInput.disabled=!form.elements.collectionEnabled.checked;}
