@@ -1,32 +1,125 @@
 # Oracle Identity & Access Management Dashboard
 
-This workspace now has two layers:
+`iam-monitoring` is a Linux-hosted dashboard for Oracle IAM environments, including OUD and WebLogic monitoring, environment bootstrap, scheduled collection, and GitHub-based upgrades.
 
-- `server-app/`: the hosted IAM dashboard server, multi-environment registry, UI, and Linux install or upgrade utilities
-- root prototype files: the earlier local static collector and HTML snapshot used to bootstrap the first version
+## Quick Install
 
-The active platform is the hosted server app in:
+Use the normal install command on a new server. It installs/checks the required OS packages, prompts for the dashboard port, and defaults to `8081`.
 
-- `server-app/app.py`
-- `server-app/static/`
-- `server-app/install.sh`
-- `server-app/upgrade.sh`
+### Install Without Proxy
 
-## Hosted server app
+```bash
+sudo bash -lc 'cd /tmp && rm -rf iam-monitoring-main iam-monitoring-main.tar.gz && curl -L https://github.com/my-oracle-user/iam-monitoring/archive/refs/heads/main.tar.gz -o iam-monitoring-main.tar.gz && tar -xzf iam-monitoring-main.tar.gz && bash /tmp/iam-monitoring-main/server-app/install.sh'
+```
 
-The current server build follows a reusable dashboard-server model:
+### Install With Proxy
 
-1. environments are stored in a SQLite-backed registry
-2. the UI adds and edits IAM environments from `Administration`
-3. collectors connect to each environment over SSH
-4. installer and upgrade utilities deploy the app as a Linux `systemd` service
+```bash
+sudo bash -lc 'export http_proxy=http://www-proxy-phx.oraclecorp.com:80; export https_proxy=http://www-proxy-phx.oraclecorp.com:80; cd /tmp && rm -rf iam-monitoring-main iam-monitoring-main.tar.gz && curl -L https://github.com/my-oracle-user/iam-monitoring/archive/refs/heads/main.tar.gz -o iam-monitoring-main.tar.gz && tar -xzf iam-monitoring-main.tar.gz && bash /tmp/iam-monitoring-main/server-app/install.sh'
+```
 
-See `server-app/README.md` for install and upgrade details.
+### Prepared Reinstall Only
 
-## Local prototype
+Use this only when Python, SSH tools, `sshpass`, `tar`, `unzip`, and `cronie` are already installed and you want to avoid a slow `dnf`/`yum` repository refresh.
 
-The root-level `index.html`, `scripts/Refresh-IamDashboard.ps1`, and `data/` files are still here as the original prototype path, but they are no longer the primary deployment model.
+```bash
+sudo bash -lc 'export http_proxy=http://www-proxy-phx.oraclecorp.com:80; export https_proxy=http://www-proxy-phx.oraclecorp.com:80; cd /tmp && rm -rf iam-monitoring-main iam-monitoring-main.tar.gz && curl -L https://github.com/my-oracle-user/iam-monitoring/archive/refs/heads/main.tar.gz -o iam-monitoring-main.tar.gz && tar -xzf iam-monitoring-main.tar.gz && bash /tmp/iam-monitoring-main/server-app/install.sh --skip-os-packages'
+```
 
-## Security note
+## Quick Upgrade
 
-Local credential files such as `config/targets.local.json` are intentionally kept out of source control. For shared or production environments, prefer a dedicated read-only account and rotate any temporary passwords after the initial setup.
+Upgrade can be done from the UI or from the Linux command line. The UI upgrade is easier once the dashboard is already running.
+
+### Upgrade Through UI
+
+Open:
+
+```text
+Administration -> Help -> GitHub Upgrade
+```
+
+If the server needs a proxy for GitHub checks or GitHub upgrade downloads, set it in:
+
+```text
+Administration -> Help -> GitHub Update Proxy
+```
+
+The UI checks the GitHub `VERSION` first. If the running version is already current, it says you are on the latest version and does not restart the service.
+
+### Upgrade Command Without Proxy
+
+```bash
+sudo bash -lc 'cd /tmp && rm -rf iam-monitoring-main iam-monitoring-main.tar.gz && curl -L https://github.com/my-oracle-user/iam-monitoring/archive/refs/heads/main.tar.gz -o iam-monitoring-main.tar.gz && tar -xzf iam-monitoring-main.tar.gz && bash /tmp/iam-monitoring-main/server-app/upgrade.sh'
+```
+
+### Upgrade Command With Proxy
+
+```bash
+sudo bash -lc 'export http_proxy=http://www-proxy-phx.oraclecorp.com:80; export https_proxy=http://www-proxy-phx.oraclecorp.com:80; cd /tmp && rm -rf iam-monitoring-main iam-monitoring-main.tar.gz && curl -L https://github.com/my-oracle-user/iam-monitoring/archive/refs/heads/main.tar.gz -o iam-monitoring-main.tar.gz && tar -xzf iam-monitoring-main.tar.gz && bash /tmp/iam-monitoring-main/server-app/upgrade.sh'
+```
+
+The upgrade keeps `/etc/iam-monitoring.env`, saved environments, runtime state, snapshots, and logs in place.
+
+## After Install
+
+The installer prints the dashboard URL at the end:
+
+```text
+http://<server-ip>:8081/
+```
+
+Useful checks:
+
+```bash
+sudo systemctl status iam-monitoring --no-pager
+sudo systemctl status iam-monitoring-upgrader --no-pager
+curl http://127.0.0.1:8081/healthz
+sudo journalctl -u iam-monitoring -n 100 --no-pager
+sudo tail -F /var/log/iam-monitoring/scheduler.log
+```
+
+## Runtime Layout
+
+- Install directory: `/opt/iam-monitoring`
+- Runtime env file: `/etc/iam-monitoring.env`
+- State directory: `/var/lib/iam-monitoring/state`
+- SQLite registry: `/var/lib/iam-monitoring/state/iam-monitoring.sqlite`
+- Snapshot directory: `/var/lib/iam-monitoring/state/snapshots`
+- Runtime env directory: `/var/lib/iam-monitoring/state/runtime_env`
+- Log directory: `/var/log/iam-monitoring`
+- Service name: `iam-monitoring`
+- Upgrade helper service: `iam-monitoring-upgrader`
+- Cron file: `/etc/cron.d/iam-monitoring`
+
+## GitHub Proxy Options
+
+The easiest place to manage GitHub proxy settings is:
+
+```text
+Administration -> Help -> GitHub Update Proxy
+```
+
+You can also put service-level proxy settings in `/etc/iam-monitoring.env` and restart the service:
+
+```bash
+IAM_MONITORING_HTTP_PROXY=http://www-proxy-phx.oraclecorp.com:80
+IAM_MONITORING_HTTPS_PROXY=http://www-proxy-phx.oraclecorp.com:80
+IAM_MONITORING_NO_PROXY=127.0.0.1,localhost
+sudo systemctl restart iam-monitoring
+```
+
+## Environment Lifecycle
+
+- Add environments from `Administration -> Environments`.
+- Use `Save And Bootstrap` when adding an environment.
+- Bootstrap uses the initial SSH user/password or private key once.
+- After bootstrap, collection uses the installed runtime SSH key.
+- Use `Run Jobs Now` inside an environment to collect immediately.
+- Scheduled collection runs through `/etc/cron.d/iam-monitoring`.
+
+## Source Layout
+
+- `server-app/`: active hosted dashboard server and Linux deployment utilities
+- `server-app/static/`: dashboard UI
+- `server-app/README.md`: server-app specific notes
+- root prototype files: earlier local prototype files kept for reference
