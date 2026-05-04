@@ -14,6 +14,7 @@ DASHBOARD_PORT="8081"
 DASHBOARD_PORT_SET=0
 COLLECTOR_MINUTES="60"
 COLLECTOR_MINUTES_SET=0
+SKIP_OS_PACKAGES="${SKIP_OS_PACKAGES:-0}"
 PKG_MGR=""
 CRON_SERVICE_NAME="cron"
 ARCHIVE=""
@@ -34,6 +35,7 @@ Options:
   --port 8081
   --collector-minutes 60
   --archive /tmp/iam-monitoring.tar.gz
+  --skip-os-packages
 
 This installer sets up the IAM dashboard service, Python virtualenv, runtime state,
 the admin-editable environment file used by systemd, and the host scheduler used
@@ -52,6 +54,7 @@ while [[ $# -gt 0 ]]; do
     --port) DASHBOARD_PORT="${2:-}"; DASHBOARD_PORT_SET=1; shift 2 ;;
     --collector-minutes) COLLECTOR_MINUTES="${2:-}"; COLLECTOR_MINUTES_SET=1; shift 2 ;;
     --archive) ARCHIVE="${2:-}"; shift 2 ;;
+    --skip-os-packages) SKIP_OS_PACKAGES=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
   esac
@@ -258,8 +261,13 @@ validate_source_dir "${SOURCE_DIR}"
 prompt_for_port
 prompt_for_collector_minutes
 
-section "Installing operating system packages"
-install_base_packages
+if [[ "${SKIP_OS_PACKAGES}" == "1" || "${SKIP_OS_PACKAGES,,}" == "true" || "${SKIP_OS_PACKAGES,,}" == "yes" ]]; then
+  section "Skipping operating system packages"
+  echo "Skipping OS package installation because --skip-os-packages or SKIP_OS_PACKAGES was set."
+else
+  section "Installing operating system packages"
+  install_base_packages
+fi
 
 section "Creating service user and directories"
 id -u "${SERVICE_USER}" >/dev/null 2>&1 || useradd --system --create-home --shell /usr/sbin/nologin "${SERVICE_USER}"

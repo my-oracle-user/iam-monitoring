@@ -18,6 +18,13 @@ sudo bash ./install.sh
 The installer prompts for the service port and defaults to `8081`.
 It also prompts for the default collector interval and defaults to `60` minutes.
 
+If the required OS packages are already installed and you want to avoid a slow `dnf`/`yum`
+repository refresh, pass `--skip-os-packages`:
+
+```bash
+sudo bash ./install.sh --skip-os-packages
+```
+
 If the server needs an outbound proxy for GitHub update checks, add these to `/etc/iam-monitoring.env`
 after install and then restart `iam-monitoring`:
 
@@ -113,6 +120,9 @@ You can also install directly from an archive:
 sudo bash ./install.sh --archive /tmp/iam-monitoring.tar.gz
 sudo bash ./install.sh --archive /tmp/iam-monitoring.zip
 ```
+
+Use `--skip-os-packages` when Python, SSH tools, `sshpass`, `tar`, `unzip`, and `cronie`
+are already present on the host.
 
 Default runtime paths:
 
