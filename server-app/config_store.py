@@ -16,6 +16,14 @@ DEFAULT_OUD_CHECKS = [
 
 DEFAULT_OIG_CHECKS = []
 
+DEFAULT_OAA_PROPERTY_NAMES = [
+    "bharosa.uio.default.challenge.type.enum.ChallengeEmail.fromAddress",
+]
+
+VALID_ENVIRONMENT_TYPES = ("oam", "oig", "oid", "oud", "oaa", "soa", "weblogic")
+PRODUCT_KEYS = ("oam", "oud", "oig", "oid", "oaa", "soa", "weblogic")
+WEBLOGIC_REQUIRED_PRODUCTS = ("oam", "oig", "soa")
+
 
 def deep_copy(value):
     return copy.deepcopy(value)
@@ -114,9 +122,58 @@ def normalize_checks(checks, default_checks):
 
 def normalize_environment_type(value, fallback=""):
     text = str(value or "").strip().lower()
-    if text in ("oam", "oig", "oid", "oud"):
+    if text == "oim":
+        return "oig"
+    if text in VALID_ENVIRONMENT_TYPES:
         return text
     return fallback
+
+
+def product_flags(**enabled):
+    return {key: bool(enabled.get(key, False)) for key in PRODUCT_KEYS}
+
+
+def apply_product_dependencies(products):
+    flags = {key: coerce_bool((products or {}).get(key), False) for key in PRODUCT_KEYS}
+    if flags.get("oig"):
+        flags["soa"] = True
+    if any(flags.get(key) for key in WEBLOGIC_REQUIRED_PRODUCTS):
+        flags["weblogic"] = True
+    return flags
+
+
+def default_weblogic_server_names(products):
+    flags = apply_product_dependencies(products)
+    names = ["AdminServer"]
+    if flags.get("oig"):
+        names.extend(["oim_server1", "soa_server1"])
+    else:
+        if flags.get("oam"):
+            names.append("oam_server1")
+        if flags.get("soa"):
+            names.append("soa_server1")
+    if flags.get("oud"):
+        names.append("OUD_Managed_server1")
+    return list(dict.fromkeys(names))
+
+
+def products_for_environment_type(value):
+    text = normalize_environment_type(value, "")
+    if text == "oam":
+        return apply_product_dependencies(product_flags(oam=True))
+    if text == "oig":
+        return apply_product_dependencies(product_flags(oig=True))
+    if text == "oud":
+        return product_flags(oud=True)
+    if text == "oid":
+        return product_flags(oid=True)
+    if text == "oaa":
+        return product_flags(oaa=True)
+    if text == "soa":
+        return apply_product_dependencies(product_flags(soa=True))
+    if text == "weblogic":
+        return product_flags(weblogic=True)
+    return product_flags()
 
 
 def has_weblogic_profile(products=None, weblogic=None):
@@ -132,7 +189,7 @@ def has_weblogic_profile(products=None, weblogic=None):
     )
 
 
-def normalize_ssh_mode(value, fallback="root_password"):
+def normalize_ssh_mode(value, fallback="user_password_sudo"):
     text = str(value or "").strip().lower()
     if text in ("root_password", "user_password", "user_password_sudo", "root_key", "user_key", "user_key_sudo"):
         return text
@@ -143,9 +200,9 @@ def normalize_ssh_profile_payload(
     payload,
     existing=None,
     default_host="",
-    default_username="root",
+    default_username="oracle",
     default_port=22,
-    default_mode="root_password",
+    default_mode="user_password_sudo",
 ):
     payload = payload or {}
     existing = existing or {}
@@ -206,25 +263,28 @@ def repair_bootstrap_server_profile(environment):
 
 def default_process_matchers(products):
     matchers = []
-    if products.get("oam") or products.get("weblogic"):
-        matchers.extend(["AdminServer", "weblogic", "oam", "ohs"])
+    if products.get("weblogic") or products.get("oam") or products.get("oig") or products.get("soa"):
+        matchers.extend(["AdminServer", "weblogic"])
+    if products.get("oam"):
+        matchers.extend(["oam", "ohs"])
     if products.get("oud"):
         matchers.extend(["oud"])
     if products.get("oig"):
         matchers.extend(["oig", "oim"])
+    if products.get("oid"):
+        matchers.extend(["oid", "ldap"])
+    if products.get("oaa"):
+        matchers.extend(["oaa"])
+    if products.get("soa"):
+        matchers.extend(["soa"])
     if not matchers:
         matchers = ["sshd", "python"]
-    return matchers
+    return list(dict.fromkeys(matchers))
 
 
 def default_environment(name=None, host=None):
     schedule_minutes = default_collection_minutes()
-    products = {
-        "oam": True,
-        "oud": True,
-        "oig": False,
-        "weblogic": True,
-    }
+    products = product_flags(oam=True, oud=True, weblogic=True)
     return {
         "id": slugify(name or host or "iam-environment"),
         "name": name or "IAM Environment",
@@ -234,10 +294,10 @@ def default_environment(name=None, host=None):
             "mode": "ssh",
             "host": host or "",
             "port": 22,
-            "username": "root",
-            "sshMode": "root_password",
+            "username": "oracle",
+            "sshMode": "user_password_sudo",
             "authType": "password",
-            "sudoRequired": False,
+            "sudoRequired": True,
             "password": "",
             "privateKeyPath": "",
             "passphrase": "",
@@ -257,10 +317,10 @@ def default_environment(name=None, host=None):
                 "mode": "ssh",
                 "host": "",
                 "port": 22,
-                "username": "root",
-                "sshMode": "root_password",
+                "username": "oracle",
+                "sshMode": "user_password_sudo",
                 "authType": "password",
-                "sudoRequired": False,
+                "sudoRequired": True,
                 "password": "",
                 "privateKeyPath": "",
                 "passphrase": "",
@@ -269,6 +329,8 @@ def default_environment(name=None, host=None):
             "serverNames": [],
         },
         "oam": {
+            "oracleHome": "",
+            "domainHome": "",
             "checks": deep_copy(DEFAULT_OAM_CHECKS),
         },
         "oud": {
@@ -285,7 +347,37 @@ def default_environment(name=None, host=None):
             "checks": deep_copy(DEFAULT_OUD_CHECKS),
         },
         "oig": {
+            "oracleHome": "",
+            "domainHome": "",
             "checks": deep_copy(DEFAULT_OIG_CHECKS),
+        },
+        "oaa": {
+            "namespace": "oaans",
+            "ingressNamespace": "ingressns",
+            "releaseName": "oaainstall",
+            "runtimeBaseUrl": "",
+            "runtimeUsername": "oaainstall-oaa",
+            "runtimePassword": "",
+            "propertyNames": deep_copy(DEFAULT_OAA_PROPERTY_NAMES),
+            "kubectlPath": "kubectl",
+            "logTailLines": 80,
+            "kubeHost": {
+                "mode": "ssh",
+                "host": host or "",
+                "port": 22,
+                "username": "root",
+                "sshMode": "root_password",
+                "authType": "password",
+                "sudoRequired": False,
+                "password": "",
+                "privateKeyPath": "",
+                "passphrase": "",
+            },
+        },
+        "soa": {
+            "oracleHome": "",
+            "domainHome": "",
+            "checks": [],
         },
         "collection": {
             "enabled": True,
@@ -294,7 +386,7 @@ def default_environment(name=None, host=None):
         "bootstrap": {
             "status": "pending",
             "strategy": "initial_ssh_then_runtime_key",
-            "initialSshMode": "root_password",
+            "initialSshMode": "user_password_sudo",
             "runtimeKeyPath": "",
             "runtimeEnvPath": "",
             "lastBootstrappedAt": "",
@@ -356,18 +448,31 @@ def normalize_environment(payload, existing=None):
     server_payload = payload.get("server") or {}
     existing_server = existing.get("server") or {}
     products_payload = payload.get("products") or {}
-    existing_products = existing.get("products") or base.get("products") or {}
+    existing_products = existing.get("products") or {}
     collection_payload = payload.get("collection") or {}
     existing_collection = existing.get("collection") or {}
     bootstrap_payload = payload.get("bootstrap") or {}
     existing_bootstrap = existing.get("bootstrap") or {}
 
+    environment_type = normalize_environment_type(
+        payload.get("environmentType"),
+        normalize_environment_type((existing or {}).get("environmentType"), ""),
+    )
+    if products_payload:
+        product_defaults = {}
+    elif existing:
+        product_defaults = existing_products
+    elif environment_type:
+        product_defaults = products_for_environment_type(environment_type)
+    else:
+        product_defaults = existing_products or base.get("products") or {}
     products = {
-        "oam": coerce_bool(products_payload.get("oam"), existing_products.get("oam", True)),
-        "oud": coerce_bool(products_payload.get("oud"), existing_products.get("oud", True)),
-        "oig": coerce_bool(products_payload.get("oig"), existing_products.get("oig", False)),
-        "weblogic": coerce_bool(products_payload.get("weblogic"), existing_products.get("weblogic", True)),
+        key: coerce_bool(products_payload.get(key), product_defaults.get(key, False))
+        for key in PRODUCT_KEYS
     }
+    if "oim" in products_payload and "oig" not in products_payload:
+        products["oig"] = coerce_bool(products_payload.get("oim"), product_defaults.get("oig", False))
+    products = apply_product_dependencies(products)
 
     server_metrics_payload = payload.get("serverMetrics") or {}
     existing_server_metrics = existing.get("serverMetrics") or {}
@@ -375,13 +480,15 @@ def normalize_environment(payload, existing=None):
     oam_payload = payload.get("oam") or {}
     oud_payload = payload.get("oud") or {}
     oig_payload = payload.get("oig") or {}
+    oaa_payload = payload.get("oaa") or {}
+    soa_payload = payload.get("soa") or {}
     weblogic_payload = payload.get("weblogic") or {}
+    existing_oam = existing.get("oam") or {}
+    existing_oig = existing.get("oig") or {}
+    existing_oaa = existing.get("oaa") or {}
+    existing_soa = existing.get("soa") or {}
     existing_weblogic = existing.get("weblogic") or {}
     operations_payload = payload.get("operations") or {}
-    environment_type = normalize_environment_type(
-        payload.get("environmentType"),
-        normalize_environment_type((existing or {}).get("environmentType"), ""),
-    )
     existing_oud = existing.get("oud") or {}
     oud_host = str(
         oud_payload.get("host")
@@ -425,6 +532,15 @@ def normalize_environment(payload, existing=None):
         if existing_weblogic_profile or payload_weblogic_profile:
             weblogic_enabled = True
         products["weblogic"] = bool(weblogic_enabled)
+    products = apply_product_dependencies(products)
+    if products.get("weblogic"):
+        weblogic_enabled = True
+    oaa_release_name = str(
+        oaa_payload.get("releaseName")
+        or existing_oaa.get("releaseName")
+        or base["oaa"].get("releaseName")
+        or "oaainstall"
+    ).strip() or "oaainstall"
 
     environment = {
         "id": str(payload.get("id") or existing.get("id") or base.get("id")).strip() or base.get("id"),
@@ -435,10 +551,10 @@ def normalize_environment(payload, existing=None):
             "mode": "ssh",
             "host": str(server_payload.get("host") or existing_server.get("host") or oud_host or base["server"]["host"]).strip(),
             "port": as_int(server_payload.get("port") or existing_server.get("port") or base["server"]["port"], 22),
-            "username": str(server_payload.get("username") or existing_server.get("username") or base["server"]["username"]).strip() or "root",
+            "username": str(server_payload.get("username") or existing_server.get("username") or base["server"]["username"]).strip() or "oracle",
             "sshMode": normalize_ssh_mode(
                 server_payload.get("sshMode") or existing_server.get("sshMode"),
-                "root_password",
+                "user_password_sudo",
             ),
             "authType": str(server_payload.get("authType") or existing_server.get("authType") or base["server"]["authType"]).strip() or "password",
             "sudoRequired": coerce_bool(server_payload.get("sudoRequired"), existing_server.get("sudoRequired", False)),
@@ -494,9 +610,9 @@ def normalize_environment(payload, existing=None):
                 weblogic_payload.get("adminHost"),
                 existing_weblogic.get("adminHost"),
                 default_host="",
-                default_username="root",
+                default_username="oracle",
                 default_port=22,
-                default_mode="root_password",
+                default_mode="user_password_sudo",
             ),
             "jstatPath": str(
                 weblogic_payload.get("jstatPath")
@@ -505,12 +621,24 @@ def normalize_environment(payload, existing=None):
             ).strip(),
             "serverNames": parse_csv_or_list(
                 weblogic_payload.get("serverNames"),
-                existing_weblogic.get("serverNames") or base["weblogic"]["serverNames"],
+                existing_weblogic.get("serverNames") or default_weblogic_server_names(products) or base["weblogic"]["serverNames"],
             ),
         },
         "oam": {
+            "oracleHome": str(
+                oam_payload.get("oracleHome")
+                or existing_oam.get("oracleHome")
+                or base["oam"].get("oracleHome")
+                or ""
+            ).strip(),
+            "domainHome": str(
+                oam_payload.get("domainHome")
+                or existing_oam.get("domainHome")
+                or base["oam"].get("domainHome")
+                or ""
+            ).strip(),
             "checks": normalize_checks(
-                oam_payload.get("checks") if "checks" in oam_payload else (existing.get("oam") or {}).get("checks"),
+                oam_payload.get("checks") if "checks" in oam_payload else existing_oam.get("checks"),
                 DEFAULT_OAM_CHECKS,
             ),
         },
@@ -558,9 +686,95 @@ def normalize_environment(payload, existing=None):
             ),
         },
         "oig": {
+            "oracleHome": str(
+                oig_payload.get("oracleHome")
+                or existing_oig.get("oracleHome")
+                or base["oig"].get("oracleHome")
+                or ""
+            ).strip(),
+            "domainHome": str(
+                oig_payload.get("domainHome")
+                or existing_oig.get("domainHome")
+                or base["oig"].get("domainHome")
+                or ""
+            ).strip(),
             "checks": normalize_checks(
-                oig_payload.get("checks") if "checks" in oig_payload else (existing.get("oig") or {}).get("checks"),
+                oig_payload.get("checks") if "checks" in oig_payload else existing_oig.get("checks"),
                 DEFAULT_OIG_CHECKS,
+            ),
+        },
+        "oaa": {
+            "namespace": str(
+                oaa_payload.get("namespace")
+                or existing_oaa.get("namespace")
+                or base["oaa"].get("namespace")
+                or "oaans"
+            ).strip() or "oaans",
+            "ingressNamespace": str(
+                oaa_payload.get("ingressNamespace")
+                or existing_oaa.get("ingressNamespace")
+                or base["oaa"].get("ingressNamespace")
+                or "ingressns"
+            ).strip() or "ingressns",
+            "releaseName": oaa_release_name,
+            "runtimeBaseUrl": str(
+                oaa_payload.get("runtimeBaseUrl")
+                or existing_oaa.get("runtimeBaseUrl")
+                or base["oaa"].get("runtimeBaseUrl")
+                or ""
+            ).strip(),
+            "runtimeUsername": str(
+                oaa_payload.get("runtimeUsername")
+                or existing_oaa.get("runtimeUsername")
+                or "{0}-oaa".format(oaa_release_name)
+            ).strip() or "{0}-oaa".format(oaa_release_name),
+            "runtimePassword": preserve_secret(
+                oaa_payload.get("runtimePassword"),
+                existing_oaa.get("runtimePassword"),
+                allow_blank=coerce_bool(oaa_payload.get("clearRuntimePassword"), False),
+            ),
+            "propertyNames": parse_csv_or_list(
+                oaa_payload.get("propertyNames"),
+                existing_oaa.get("propertyNames") or DEFAULT_OAA_PROPERTY_NAMES,
+            ),
+            "kubectlPath": str(
+                oaa_payload.get("kubectlPath")
+                or existing_oaa.get("kubectlPath")
+                or base["oaa"].get("kubectlPath")
+                or "kubectl"
+            ).strip() or "kubectl",
+            "logTailLines": max(10, min(500, as_int(
+                oaa_payload.get("logTailLines")
+                or existing_oaa.get("logTailLines")
+                or base["oaa"].get("logTailLines")
+                or 80,
+                80,
+            ))),
+            "kubeHost": normalize_ssh_profile_payload(
+                oaa_payload.get("kubeHost"),
+                existing_oaa.get("kubeHost"),
+                default_host=str(server_payload.get("host") or existing_server.get("host") or base["server"].get("host") or "").strip(),
+                default_username="root",
+                default_port=as_int(server_payload.get("port") or existing_server.get("port") or 22, 22),
+                default_mode="root_password",
+            ),
+        },
+        "soa": {
+            "oracleHome": str(
+                soa_payload.get("oracleHome")
+                or existing_soa.get("oracleHome")
+                or base["soa"].get("oracleHome")
+                or ""
+            ).strip(),
+            "domainHome": str(
+                soa_payload.get("domainHome")
+                or existing_soa.get("domainHome")
+                or base["soa"].get("domainHome")
+                or ""
+            ).strip(),
+            "checks": normalize_checks(
+                soa_payload.get("checks") if "checks" in soa_payload else existing_soa.get("checks"),
+                [],
             ),
         },
         "collection": {
@@ -593,7 +807,7 @@ def normalize_environment(payload, existing=None):
                 or server_payload.get("sshMode")
                 or existing_server.get("sshMode")
                 or base["bootstrap"].get("initialSshMode")
-            ).strip() or "root_password",
+            ).strip() or "user_password_sudo",
             "runtimeKeyPath": str(
                 bootstrap_payload.get("runtimeKeyPath")
                 or existing_bootstrap.get("runtimeKeyPath")
@@ -637,7 +851,7 @@ def normalize_environment(payload, existing=None):
 
     ssh_mode = normalize_ssh_mode(
         server_payload.get("sshMode") or existing_server.get("sshMode"),
-        environment["server"].get("sshMode") or "root_password",
+        environment["server"].get("sshMode") or "user_password_sudo",
     )
     environment["server"]["sshMode"] = ssh_mode
     environment["server"]["authType"] = "private_key" if ssh_mode.endswith("_key") else "password"
@@ -653,7 +867,12 @@ def normalize_environment(payload, existing=None):
     if not environment["oud"]["checks"] and products.get("oud"):
         environment["oud"]["checks"] = deep_copy(DEFAULT_OUD_CHECKS)
 
-    environment["weblogic"]["enabled"] = bool(products.get("weblogic"))
+    environment["weblogic"]["enabled"] = bool(
+        products.get("weblogic")
+        or products.get("oam")
+        or products.get("oig")
+        or products.get("soa")
+    )
 
     return environment
 
@@ -832,6 +1051,8 @@ def serialize_environment(environment, include_sensitive=False):
     environment = environment or {}
     server = environment.get("server") or {}
     oud = environment.get("oud") or {}
+    oaa = environment.get("oaa") or {}
+    oaa_kube_host = oaa.get("kubeHost") or {}
     weblogic = environment.get("weblogic") or {}
     weblogic_admin_host = weblogic.get("adminHost") or {}
 
@@ -845,7 +1066,7 @@ def serialize_environment(environment, include_sensitive=False):
             "host": server.get("host") or "",
             "port": server.get("port") or 22,
             "username": server.get("username") or "",
-            "sshMode": normalize_ssh_mode(server.get("sshMode"), "root_password"),
+            "sshMode": normalize_ssh_mode(server.get("sshMode"), "user_password_sudo"),
             "authType": server.get("authType") or "password",
             "sudoRequired": bool(server.get("sudoRequired")),
             "privateKeyPath": server.get("privateKeyPath") or "",
@@ -866,7 +1087,7 @@ def serialize_environment(environment, include_sensitive=False):
                 "host": weblogic_admin_host.get("host") or "",
                 "port": weblogic_admin_host.get("port") or 22,
                 "username": weblogic_admin_host.get("username") or "",
-                "sshMode": normalize_ssh_mode(weblogic_admin_host.get("sshMode"), "root_password"),
+                "sshMode": normalize_ssh_mode(weblogic_admin_host.get("sshMode"), "user_password_sudo"),
                 "authType": weblogic_admin_host.get("authType") or "password",
                 "sudoRequired": bool(weblogic_admin_host.get("sudoRequired")),
                 "privateKeyPath": weblogic_admin_host.get("privateKeyPath") or "",
@@ -894,6 +1115,31 @@ def serialize_environment(environment, include_sensitive=False):
             "checks": deep_copy(oud.get("checks") or []),
         },
         "oig": deep_copy(environment.get("oig") or {}),
+        "oaa": {
+            "namespace": oaa.get("namespace") or "oaans",
+            "ingressNamespace": oaa.get("ingressNamespace") or "ingressns",
+            "releaseName": oaa.get("releaseName") or "oaainstall",
+            "runtimeBaseUrl": oaa.get("runtimeBaseUrl") or "",
+            "runtimeUsername": oaa.get("runtimeUsername") or "",
+            "runtimePassword": "",
+            "hasRuntimePassword": bool(oaa.get("runtimePassword")),
+            "propertyNames": deep_copy(oaa.get("propertyNames") or []),
+            "kubectlPath": oaa.get("kubectlPath") or "kubectl",
+            "logTailLines": oaa.get("logTailLines") or 80,
+            "kubeHost": {
+                "mode": oaa_kube_host.get("mode") or "ssh",
+                "host": oaa_kube_host.get("host") or "",
+                "port": oaa_kube_host.get("port") or 22,
+                "username": oaa_kube_host.get("username") or "",
+                "sshMode": normalize_ssh_mode(oaa_kube_host.get("sshMode"), "root_password"),
+                "authType": oaa_kube_host.get("authType") or "password",
+                "sudoRequired": bool(oaa_kube_host.get("sudoRequired")),
+                "privateKeyPath": oaa_kube_host.get("privateKeyPath") or "",
+                "hasPassword": bool(oaa_kube_host.get("password")),
+                "hasPassphrase": bool(oaa_kube_host.get("passphrase")),
+            },
+        },
+        "soa": deep_copy(environment.get("soa") or {}),
         "operations": deep_copy(environment.get("operations") or {}),
     }
 
@@ -904,5 +1150,8 @@ def serialize_environment(environment, include_sensitive=False):
         payload["weblogic"]["adminHost"]["password"] = weblogic_admin_host.get("password") or ""
         payload["weblogic"]["adminHost"]["passphrase"] = weblogic_admin_host.get("passphrase") or ""
         payload["oud"]["bindPassword"] = oud.get("bindPassword") or ""
+        payload["oaa"]["runtimePassword"] = oaa.get("runtimePassword") or ""
+        payload["oaa"]["kubeHost"]["password"] = oaa_kube_host.get("password") or ""
+        payload["oaa"]["kubeHost"]["passphrase"] = oaa_kube_host.get("passphrase") or ""
 
     return payload

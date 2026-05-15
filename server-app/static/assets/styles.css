@@ -475,6 +475,10 @@ textarea {
     padding: 0 28px 28px;
 }
 
+.page-badges .page-product-tab {
+    box-shadow: none;
+}
+
 .status-pill,
 .badge,
 .product-chip {
@@ -1137,6 +1141,127 @@ tbody tr:last-child td {
     min-height: 18px;
 }
 
+.product-choice-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px 12px;
+}
+
+.product-choice {
+    min-height: 38px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.54);
+}
+
+.product-add-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+}
+
+.product-selection-list {
+    display: flex;
+    min-height: 42px;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
+.product-selection-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 36px;
+    padding: 6px 8px 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.68);
+    font-weight: 700;
+}
+
+.product-remove-button {
+    width: 24px;
+    height: 24px;
+    min-height: 24px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: rgba(22, 21, 19, 0.08);
+    color: var(--ink);
+    font-size: 1rem;
+    line-height: 1;
+}
+
+.product-empty-note {
+    color: var(--ink-muted);
+    font-size: 0.92rem;
+}
+
+.metric-choice-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+}
+
+.metric-choice {
+    min-height: 38px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.58);
+}
+
+.weblogic-metrics-layout {
+    display: grid;
+    grid-template-columns: minmax(250px, 310px) minmax(0, 1fr);
+    gap: 18px;
+    align-items: start;
+}
+
+.weblogic-metric-sidebar {
+    min-width: 0;
+}
+
+.weblogic-metric-loader .panel-header {
+    display: grid;
+    gap: 14px;
+}
+
+.weblogic-metric-loader .panel-actions,
+.weblogic-metric-loader .button {
+    width: 100%;
+}
+
+.weblogic-metric-results {
+    min-width: 0;
+}
+
+.oaa-control-grid {
+    display: grid;
+    grid-template-columns: minmax(260px, 320px) minmax(360px, 1fr) minmax(320px, 0.85fr);
+    gap: 18px;
+    align-items: start;
+}
+
+.oaa-profile-panel,
+.oaa-diagnostics-panel {
+    min-width: 0;
+}
+
+.oaa-profile-panel .definition-row,
+.oaa-diagnostics-panel .definition-row {
+    grid-template-columns: minmax(150px, 190px) minmax(0, 1fr);
+}
+
+.diagnostic-command-list {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+}
+
 .modal-backdrop {
     position: fixed;
     inset: 0;
@@ -1278,6 +1403,8 @@ tbody tr:last-child td {
 
     .content-grid.two-column,
     .content-grid.three-column,
+    .weblogic-metrics-layout,
+    .oaa-control-grid,
     .form-grid,
     .form-grid.three-column {
         grid-template-columns: 1fr;
